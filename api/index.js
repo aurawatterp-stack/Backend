@@ -21,8 +21,18 @@ module.exports = (req, res) => {
   } catch (err) {
     // Avoid FUNCTION_INVOCATION_FAILED with empty body; return a deterministic 500 instead.
     console.error("[BOOT_ERROR]", err);
+    // Ensure browser can read the response for debugging even during CORS preflight.
+    res.setHeader("access-control-allow-origin", "*");
+    res.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+    res.setHeader("access-control-allow-headers", "authorization,content-type");
     res.statusCode = 500;
     res.setHeader("content-type", "text/plain; charset=utf-8");
-    res.end("Backend boot failed. Check Vercel function logs.");
+    const details =
+      err && typeof err === "object" && "stack" in err
+        ? String(err.stack)
+        : err instanceof Error
+          ? err.message
+          : String(err);
+    res.end(`Backend boot failed:\n${details}`);
   }
 };
