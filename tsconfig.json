@@ -13,5 +13,5 @@
     "types": ["node"],
     "ignoreDeprecations": "6.0"
   },
-  "include": ["src/**/*.ts", "api/**/*.ts", "backend.ts"]
+  "include": ["src/**/*.ts", "backend.ts"]
 }
