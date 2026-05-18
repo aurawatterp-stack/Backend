@@ -1,7 +1,9 @@
 {
   "scripts": {
+    "build": "tsc -p tsconfig.json",
     "dev": "./node_modules/.bin/ts-node-dev --respawn --transpile-only backend.ts",
-    "start": "./node_modules/.bin/ts-node-dev --transpile-only backend.ts"
+    "start": "./node_modules/.bin/ts-node-dev --transpile-only backend.ts",
+    "start:prod": "node dist/backend.js"
   },
   "dependencies": {
     "bcryptjs": "^3.0.3",
