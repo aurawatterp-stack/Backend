@@ -5,13 +5,20 @@
 // - Load from compiled output (`dist/`) so runtime doesn't depend on TS.
 
 let cachedApp;
+let bootError;
 
 function loadApp() {
+  if (bootError) throw bootError;
   if (cachedApp) return cachedApp;
   // eslint-disable-next-line global-require
-  const mod = require("../dist/src/app.js");
-  cachedApp = mod.default || mod;
-  return cachedApp;
+  try {
+    const mod = require("../dist/src/app.js");
+    cachedApp = mod.default || mod;
+    return cachedApp;
+  } catch (err) {
+    bootError = err instanceof Error ? err : new Error(String(err));
+    throw bootError;
+  }
 }
 
 module.exports = (req, res) => {
