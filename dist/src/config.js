@@ -121,8 +121,15 @@ function corsOriginsFromEnv(raw) {
         return value.split(",").map((v) => v.trim()).filter(Boolean);
     return value;
 }
-const uploadDirRaw = process.env.UPLOAD_DIR?.trim() || "uploads";
-const uploadDirAbs = path.isAbsolute(uploadDirRaw) ? uploadDirRaw : path.resolve(backendRoot, uploadDirRaw);
+const isServerless = Boolean(process.env.VERCEL);
+// Vercel (and most serverless platforms) has a read-only filesystem, except `/tmp`.
+// Any disk uploads must go to `/tmp` or an external object store.
+const uploadDirRaw = process.env.UPLOAD_DIR?.trim() || (isServerless ? "/tmp/uploads" : "uploads");
+const uploadDirAbs = path.isAbsolute(uploadDirRaw)
+    ? uploadDirRaw
+    : isServerless
+        ? path.resolve("/tmp", uploadDirRaw)
+        : path.resolve(backendRoot, uploadDirRaw);
 try {
     fs.mkdirSync(uploadDirAbs, { recursive: true });
 }
