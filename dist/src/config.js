@@ -111,8 +111,10 @@ function bool(name, fallback) {
 }
 function corsOriginsFromEnv(raw) {
     const value = (raw ?? "").trim();
+    // If not configured, be permissive on Vercel to avoid "Failed to fetch" due to CORS.
+    // For local dev, keep localhost-only by default.
     if (!value)
-        return "http://localhost:3000";
+        return process.env.VERCEL ? true : "http://localhost:3000";
     if (value === "*")
         return true;
     if (value.includes(","))
