@@ -1,23 +1,28 @@
 // Vercel Node Function entrypoint (CommonJS).
-// Loads the compiled Express app from `dist/`, which we include via `includeFiles`.
-
-const path = require("path");
+//
+// IMPORTANT:
+// - Keep `require()` path static so Vercel's Node File Trace can include all deps (node_modules).
+// - Load from compiled output (`dist/`) so runtime doesn't depend on TS.
 
 let cachedApp;
 
-function getApp() {
+function loadApp() {
   if (cachedApp) return cachedApp;
-
-  // In Vercel Functions, `process.cwd()` is the function bundle root.
-  const appPath = path.join(process.cwd(), "dist", "src", "app.js");
-  // eslint-disable-next-line global-require, import/no-dynamic-require
-  const mod = require(appPath);
+  // eslint-disable-next-line global-require
+  const mod = require("../dist/src/app.js");
   cachedApp = mod.default || mod;
   return cachedApp;
 }
 
 module.exports = (req, res) => {
-  const app = getApp();
-  return app(req, res);
+  try {
+    const app = loadApp();
+    return app(req, res);
+  } catch (err) {
+    // Avoid FUNCTION_INVOCATION_FAILED with empty body; return a deterministic 500 instead.
+    console.error("[BOOT_ERROR]", err);
+    res.statusCode = 500;
+    res.setHeader("content-type", "text/plain; charset=utf-8");
+    res.end("Backend boot failed. Check Vercel function logs.");
+  }
 };
-
