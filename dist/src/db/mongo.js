@@ -9,15 +9,33 @@ let dbPromise = null;
 function stripUnsupportedTlsQueryParams(uri) {
     // Users sometimes try adding `maxVersion` / `minVersion` to the connection string
     // after reading Node TLS docs. The MongoDB Node driver rejects these options.
+    //
+    // Also: MongoDB URI options (query params) generally must not be specified with
+    // an empty value (e.g. `?appName` or `?appName=`). If present, drop them so a
+    // typo in `.env` doesn't hard-crash the server.
     try {
         const parsed = new URL(uri);
-        const keys = Array.from(parsed.searchParams.keys());
-        for (const key of keys) {
+        const uniqueKeys = Array.from(new Set(parsed.searchParams.keys()));
+        const nextParams = new URLSearchParams();
+        for (const key of uniqueKeys) {
             const k = key.toLowerCase();
-            if (k === "maxversion" || k === "minversion") {
-                parsed.searchParams.delete(key);
+            const values = parsed.searchParams.getAll(key);
+            // Strip unsupported TLS query params.
+            if (k === "maxversion" || k === "minversion")
+                continue;
+            // `readPreferenceTags` is the one option where empty values can be meaningful.
+            if (k === "readpreferencetags") {
+                for (const v of values)
+                    nextParams.append(key, v);
+                continue;
+            }
+            for (const v of values) {
+                if (v === "")
+                    continue;
+                nextParams.append(key, v);
             }
         }
+        parsed.search = nextParams.toString();
         return parsed.toString();
     }
     catch {

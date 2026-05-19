@@ -31,6 +31,17 @@ app.use((0, morgan_1.default)("dev"));
 app.get("/health", (_req, res) => {
     res.json({ status: "ok", timestamp: new Date().toISOString(), service: "Aurawatt IMS API" });
 });
+// Root route (avoid noisy 404s when opened in a browser / pinged by platforms)
+app.get("/", (_req, res) => {
+    res.json({
+        service: "Aurawatt IMS API",
+        status: "ok",
+        health: "/health",
+        apiBase: "/api",
+    });
+});
+// Avoid favicon 404 noise for API-only service
+app.get(["/favicon.ico", "/favicon.png"], (_req, res) => res.status(204).end());
 // Mount routers
 app.use("/api/auth", auth_1.default);
 app.use("/api/users", users_1.default);
