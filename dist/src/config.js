@@ -110,6 +110,7 @@ function bool(name, fallback) {
     }
 }
 function corsOriginsFromEnv(raw) {
+    const normalize = (origin) => origin.trim().replace(/\/+$/, "");
     const value = (raw ?? "").trim();
     // If not configured, be permissive on Vercel to avoid "Failed to fetch" due to CORS.
     // For local dev, keep localhost-only by default.
@@ -118,8 +119,8 @@ function corsOriginsFromEnv(raw) {
     if (value === "*")
         return true;
     if (value.includes(","))
-        return value.split(",").map((v) => v.trim()).filter(Boolean);
-    return value;
+        return value.split(",").map(normalize).filter(Boolean);
+    return normalize(value);
 }
 const isServerless = Boolean(process.env.VERCEL);
 // Vercel (and most serverless platforms) has a read-only filesystem, except `/tmp`.
