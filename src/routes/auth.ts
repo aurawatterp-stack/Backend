@@ -42,6 +42,12 @@ router.post("/login", async (req: Request, res: Response) => {
   });
 });
 
+// Helpful guard for accidental GET hits (e.g. opening the URL in a browser).
+router.all("/login", (req: Request, res: Response) => {
+  res.setHeader("Allow", "POST, OPTIONS");
+  return fail(res, `Method ${req.method} not allowed. Use POST /api/auth/login.`, 405);
+});
+
 /**
  * POST /api/auth/register
  * Body: { name, email, mobile, role, password }
