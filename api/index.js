@@ -24,6 +24,24 @@ function loadApp() {
 module.exports = (req, res) => {
   try {
     const app = loadApp();
+    // When routed via `vercel.json` we attach the original path as a query param.
+    // Use it to restore the original URL so Express routing works.
+    if (req.query && typeof req.query.__path === "string") {
+      const restored = `/${req.query.__path}`.replace(/\/{2,}/g, "/");
+      req.url = restored;
+      delete req.query.__path;
+    }
+    // If Vercel rewrote the request to this function, preserve the original pathname.
+    // Vercel provides the original URL in `x-vercel-rewrite` or `x-matched-path` (varies by runtime).
+    const original =
+      req.headers["x-vercel-rewrite"] ||
+      req.headers["x-forwarded-uri"] ||
+      req.headers["x-original-uri"] ||
+      req.headers["x-vercel-original-url"] ||
+      req.headers["x-matched-path"];
+    if (typeof original === "string" && original.startsWith("/")) {
+      req.url = original;
+    }
     return app(req, res);
   } catch (err) {
     // Avoid FUNCTION_INVOCATION_FAILED with empty body; return a deterministic 500 instead.

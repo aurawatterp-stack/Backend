@@ -45,12 +45,16 @@ app.use("/api/distributors", distributorsRouter);
 app.use("/api/dashboard", dashboardRouter);
 
 // 404 fallback
-app.use((_req, res) => {
-  res.status(404).json({ success: false, message: "Route not found" });
+app.use((req, res) => {
+  res.status(404).json({
+    success: false,
+    message: "Route not found",
+    path: (req as any).originalUrl || req.url,
+    method: req.method,
+  });
 });
 
 // Global error handler (must be last)
 app.use(errorHandler);
 
 export default app;
-

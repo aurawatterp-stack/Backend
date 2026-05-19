@@ -8,5 +8,5 @@
       "config": { "includeFiles": ["dist/**"] }
     }
   ],
-  "routes": [{ "src": "/(.*)", "dest": "/api/index.js" }]
+  "routes": [{ "src": "/(.*)", "dest": "/api/index.js?__path=$1" }]
 }

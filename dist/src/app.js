@@ -44,8 +44,13 @@ app.use("/api/complaints", complaints_1.default);
 app.use("/api/distributors", distributors_1.default);
 app.use("/api/dashboard", dashboard_1.default);
 // 404 fallback
-app.use((_req, res) => {
-    res.status(404).json({ success: false, message: "Route not found" });
+app.use((req, res) => {
+    res.status(404).json({
+        success: false,
+        message: "Route not found",
+        path: req.originalUrl || req.url,
+        method: req.method,
+    });
 });
 // Global error handler (must be last)
 app.use(error_1.errorHandler);
