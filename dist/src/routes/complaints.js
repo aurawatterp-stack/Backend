@@ -40,7 +40,7 @@ router.get("/stats", auth_1.authenticate, async (_req, res) => {
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, rawMaterialId, vendorName, dateOfSale, dateOfComplaint, issueDescription } = req.body;
+    const { type, productSerialNo, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription } = req.body;
     if (!type || !dateOfComplaint || !issueDescription) {
         return (0, http_1.fail)(res, "type, dateOfComplaint, issueDescription are required");
     }
@@ -50,6 +50,7 @@ router.post("/", auth_1.authenticate, async (req, res) => {
         type,
         productSerialNo,
         rawMaterialId,
+        rawMaterialName,
         vendorName,
         dateOfSale: dateOfSale ? new Date(dateOfSale) : undefined,
         dateOfComplaint: new Date(dateOfComplaint),

@@ -30,21 +30,25 @@ router.get("/", auth_1.authenticate, async (req, res) => {
 /** POST /api/manufactured — record new production */
 router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { productId, serialNumber, mfgDate } = req.body;
+    const { productId, serialNumber, mfgDate, status, invoiceNo, paymentStatus } = req.body;
     if (!productId || !serialNumber || !mfgDate) {
         return (0, http_1.fail)(res, "productId, serialNumber, mfgDate are required");
     }
     const duplicate = await c.manufactured.findOne({ serialNumber }, { projection: { id: 1 } });
     if (duplicate)
         return (0, http_1.fail)(res, "This serial number already exists");
+    const normalizedStatus = status === "Sold" || status === "Returned" || status === "In Stock" ? status : "In Stock";
+    const normalizedPayment = paymentStatus === "Pending" || paymentStatus === "Verified" || paymentStatus === "N/A"
+        ? paymentStatus
+        : "N/A";
     const entry = {
         id: (0, id_1.generateId)(),
         productId,
         serialNumber,
         mfgDate: new Date(mfgDate),
-        status: "In Stock",
-        invoiceNo: undefined,
-        paymentStatus: "N/A",
+        status: normalizedStatus,
+        invoiceNo: invoiceNo ? String(invoiceNo) : undefined,
+        paymentStatus: normalizedPayment,
         createdAt: new Date(),
         updatedAt: new Date(),
     };

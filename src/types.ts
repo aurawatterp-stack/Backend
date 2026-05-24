@@ -121,6 +121,7 @@ export type Complaint = {
   type: ComplaintType;
   productSerialNo?: string;
   rawMaterialId?: string;
+  rawMaterialName?: string;
   vendorName?: string;
   dateOfSale?: Date;
   dateOfComplaint: Date;

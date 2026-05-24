@@ -27,7 +27,7 @@ router.get("/", authenticate, authorize("Admin"), async (_req: Request, res: Res
  */
 router.get("/pending-registrations", authenticate, authorize("Admin"), async (_req: Request, res: Response) => {
   const c = await getCollections();
-  const pending = await c.pendingRegistrations.find({}).toArray();
+  const pending = await c.pendingRegistrations.find({}, { projection: { password: 0 } }).toArray();
   return ok(res, pending);
 });
 
