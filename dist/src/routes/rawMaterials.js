@@ -52,6 +52,27 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory 
         updatedAt: new Date(),
     };
     await c.rawMaterials.insertOne(entry);
+    // Best-effort notification (never fail the main operation).
+    try {
+        const user = req.user;
+        const notification = {
+            id: (0, id_1.generateId)(),
+            type: "raw_material_received",
+            title: "Raw Material Received",
+            body: `${materialName} • ${batch}`,
+            entityType: "raw_material",
+            entityId: entry.id,
+            meta: { materialName, batch, referenceNo, productSeriesId },
+            audienceRoles: ["Admin", "Inventory Manager"],
+            readBy: [],
+            createdBy: user.userId,
+            createdAt: new Date(),
+        };
+        await c.notifications.insertOne(notification);
+    }
+    catch (err) {
+        console.warn("Failed to insert notification:", err instanceof Error ? err.message : String(err));
+    }
     return (0, http_1.ok)(res, entry, 201);
 });
 /** PUT /api/raw-materials/:id */

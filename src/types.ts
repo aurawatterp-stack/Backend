@@ -143,3 +143,27 @@ export type Distributor = {
   createdAt: Date;
   updatedAt: Date;
 };
+
+export type NotificationType =
+  | "sale_recorded"
+  | "raw_material_received"
+  | "manufactured_created"
+  | "complaint_created"
+  | "user_registered";
+
+export type Notification = {
+  id: string;
+  type: NotificationType;
+  title: string;
+  body?: string;
+  entityType?: string;
+  entityId?: string;
+  meta?: Record<string, unknown>;
+  /** If omitted, notification is visible to all authenticated users. */
+  audienceRoles?: UserRole[];
+  /** If set, notification is visible to these users (in addition to roles if provided). */
+  audienceUserIds?: string[];
+  readBy: string[];
+  createdBy: string;
+  createdAt: Date;
+};

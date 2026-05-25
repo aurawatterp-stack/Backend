@@ -2,7 +2,7 @@ import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
 import { authenticate, authorize } from "../middleware/auth";
-import type { RawMaterial } from "../types";
+import type { JwtPayload, Notification, RawMaterial } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 
@@ -52,6 +52,28 @@ router.post("/", authenticate, authorize("Admin", "Inventory Manager"), async (r
     updatedAt: new Date(),
   };
   await c.rawMaterials.insertOne(entry);
+
+  // Best-effort notification (never fail the main operation).
+  try {
+    const user = (req as any).user as JwtPayload;
+    const notification: Notification = {
+      id: generateId(),
+      type: "raw_material_received",
+      title: "Raw Material Received",
+      body: `${materialName} • ${batch}`,
+      entityType: "raw_material",
+      entityId: entry.id,
+      meta: { materialName, batch, referenceNo, productSeriesId },
+      audienceRoles: ["Admin", "Inventory Manager"],
+      readBy: [],
+      createdBy: user.userId,
+      createdAt: new Date(),
+    };
+    await c.notifications.insertOne(notification);
+  } catch (err) {
+    console.warn("Failed to insert notification:", err instanceof Error ? err.message : String(err));
+  }
+
   return ok(res, entry, 201);
 });
 

@@ -15,5 +15,6 @@ async function getCollections() {
         sales: db.collection("sales"),
         complaints: db.collection("complaints"),
         distributors: db.collection("distributors"),
+        notifications: db.collection("notifications"),
     };
 }

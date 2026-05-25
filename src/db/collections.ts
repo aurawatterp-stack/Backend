@@ -11,6 +11,7 @@ import type {
   Sale,
   SerialEntry,
   User,
+  Notification,
 } from "../types";
 import { getMongoDb } from "./mongo";
 
@@ -25,6 +26,7 @@ export type Collections = {
   sales: Collection<Sale>;
   complaints: Collection<Complaint>;
   distributors: Collection<Distributor>;
+  notifications: Collection<Notification>;
 };
 
 export async function getCollections(): Promise<Collections> {
@@ -40,6 +42,6 @@ export async function getCollections(): Promise<Collections> {
     sales: db.collection<Sale>("sales"),
     complaints: db.collection<Complaint>("complaints"),
     distributors: db.collection<Distributor>("distributors"),
+    notifications: db.collection<Notification>("notifications"),
   };
 }
-

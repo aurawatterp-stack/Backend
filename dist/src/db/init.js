@@ -24,9 +24,13 @@ async function initDatabase() {
         c.sales,
         c.complaints,
         c.distributors,
+        c.notifications,
     ]) {
         await ensureUniqueIndex(col, { id: 1 });
     }
     await ensureIndex(c.serials, { serialNumber: 1 });
     await ensureIndex(c.manufactured, { serialNumber: 1 });
+    await ensureIndex(c.notifications, { createdAt: -1 });
+    await ensureIndex(c.notifications, { audienceRoles: 1 });
+    await ensureIndex(c.notifications, { audienceUserIds: 1 });
 }

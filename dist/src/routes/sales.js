@@ -66,6 +66,26 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Sales Mana
         createdAt: new Date(),
     };
     await c.sales.insertOne(sale);
+    // Best-effort notification (never fail the main operation).
+    try {
+        const notification = {
+            id: (0, id_1.generateId)(),
+            type: "sale_recorded",
+            title: "New Sale Recorded",
+            body: `${serialNumber} • ${referenceNo}`,
+            entityType: "sale",
+            entityId: sale.id,
+            meta: { serialNumber, referenceNo, customerId },
+            audienceRoles: ["Admin", "Sales Manager", "Inventory Manager"],
+            readBy: [],
+            createdBy: user.userId,
+            createdAt: new Date(),
+        };
+        await c.notifications.insertOne(notification);
+    }
+    catch (err) {
+        console.warn("Failed to insert notification:", err instanceof Error ? err.message : String(err));
+    }
     return (0, http_1.ok)(res, sale, 201);
 });
 exports.default = router;
