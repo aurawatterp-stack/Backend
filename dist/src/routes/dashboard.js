@@ -9,7 +9,7 @@ const auth_1 = require("../middleware/auth");
 const http_1 = require("../utils/http");
 const router = express_1.default.Router();
 /** GET /api/dashboard/stats */
-router.get("/stats", auth_1.authenticate, async (_req, res) => {
+router.get("/stats", auth_1.authenticate, (0, auth_1.requireAnyPermission)("dashboard:view"), async (_req, res) => {
     const c = await (0, collections_1.getCollections)();
     const rawAgg = await c.rawMaterials
         .aggregate([{ $group: { _id: null, total: { $sum: "$quantityAvailable" } } }])
@@ -31,7 +31,7 @@ router.get("/stats", auth_1.authenticate, async (_req, res) => {
     });
 });
 /** GET /api/dashboard/timeline?months=6 */
-router.get("/timeline", auth_1.authenticate, async (req, res) => {
+router.get("/timeline", auth_1.authenticate, (0, auth_1.requireAnyPermission)("dashboard:view"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const monthsParam = req.query.months ?? "6";
     const months = Math.min(24, Math.max(1, parseInt(monthsParam)));

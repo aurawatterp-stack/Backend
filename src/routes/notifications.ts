@@ -2,6 +2,7 @@ import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
 import { authenticate } from "../middleware/auth";
+import { roleMatchSet } from "../rbac";
 import type { JwtPayload, Notification } from "../types";
 import { fail, ok } from "../utils/http";
 
@@ -19,7 +20,7 @@ function visibleToUserFilter(user: JwtPayload): Record<string, unknown> {
       // Targeted notifications.
       { audienceUserIds: user.userId },
       // Role-targeted notifications.
-      { audienceRoles: user.role },
+      { audienceRoles: { $in: roleMatchSet(user.role) } },
       // Global notifications (no explicit audience fields).
       { $and: [{ audienceUserIds: { $exists: false } }, { audienceRoles: { $exists: false } }] },
     ],
@@ -86,4 +87,3 @@ router.post("/read-all", authenticate, async (req: Request, res: Response) => {
 });
 
 export default router;
-

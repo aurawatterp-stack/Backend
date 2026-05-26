@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
-import { authenticate, authorize } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { JwtPayload, Notification, RawMaterial } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -9,7 +9,7 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/raw-materials — filter by series, batch, vendor, dateFrom, dateTo */
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("inventory:raw-materials", "complaints:supplier"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", series, batch, vendor, page = "1", limit = "20" } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};
@@ -28,7 +28,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 });
 
 /** POST /api/raw-materials */
-router.post("/", authenticate, authorize("Admin", "Inventory Manager"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("inventory:raw-materials"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { productSeriesId, materialName, dateReceived, billType, referenceNo, quantityReceived, vendorName, batch, notes } = req.body;
 
@@ -64,7 +64,7 @@ router.post("/", authenticate, authorize("Admin", "Inventory Manager"), async (r
       entityType: "raw_material",
       entityId: entry.id,
       meta: { materialName, batch, referenceNo, productSeriesId },
-      audienceRoles: ["Admin", "Inventory Manager"],
+      audienceRoles: ["Admin", "Inventory"],
       readBy: [],
       createdBy: user.userId,
       createdAt: new Date(),
@@ -78,7 +78,7 @@ router.post("/", authenticate, authorize("Admin", "Inventory Manager"), async (r
 });
 
 /** PUT /api/raw-materials/:id */
-router.put("/:id", authenticate, authorize("Admin", "Inventory Manager"), async (req: Request, res: Response) => {
+router.put("/:id", authenticate, requireAnyPermission("inventory:raw-materials"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
   const existing = await c.rawMaterials.findOne({ id });
@@ -89,7 +89,7 @@ router.put("/:id", authenticate, authorize("Admin", "Inventory Manager"), async 
 });
 
 /** DELETE /api/raw-materials/:id */
-router.delete("/:id", authenticate, authorize("Admin", "Inventory Manager"), async (req: Request, res: Response) => {
+router.delete("/:id", authenticate, requireAnyPermission("inventory:raw-materials"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const result = await c.rawMaterials.deleteOne({ id: req.params.id });
   if (!result.deletedCount) return fail(res, "Raw material entry not found", 404);

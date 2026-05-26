@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const collections_1 = require("../db/collections");
 const auth_1 = require("../middleware/auth");
+const rbac_1 = require("../rbac");
 const http_1 = require("../utils/http");
 const router = express_1.default.Router();
 function parseBool(v) {
@@ -20,7 +21,7 @@ function visibleToUserFilter(user) {
             // Targeted notifications.
             { audienceUserIds: user.userId },
             // Role-targeted notifications.
-            { audienceRoles: user.role },
+            { audienceRoles: { $in: (0, rbac_1.roleMatchSet)(user.role) } },
             // Global notifications (no explicit audience fields).
             { $and: [{ audienceUserIds: { $exists: false } }, { audienceRoles: { $exists: false } }] },
         ],

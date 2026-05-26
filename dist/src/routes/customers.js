@@ -10,7 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/customers — paginated, filterable by name/type */
-router.get("/", auth_1.authenticate, async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", type, page = "1", limit = "20" } = req.query;
     const filter = {};
@@ -25,7 +25,7 @@ router.get("/", auth_1.authenticate, async (req, res) => {
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
 /** GET /api/customers/:id */
-router.get("/:id", auth_1.authenticate, async (req, res) => {
+router.get("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const customer = await c.customers.findOne({ id: req.params.id });
     if (!customer)
@@ -33,7 +33,7 @@ router.get("/:id", auth_1.authenticate, async (req, res) => {
     return (0, http_1.ok)(res, customer);
 });
 /** POST /api/customers */
-router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Sales Manager"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { name, type, email, phone, address } = req.body;
     if (!name || !type || !email || !phone) {
@@ -54,7 +54,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Sales Mana
     return (0, http_1.ok)(res, newCustomer, 201);
 });
 /** PUT /api/customers/:id */
-router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Sales Manager"), async (req, res) => {
+router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.customers.findOne({ id });
@@ -66,7 +66,7 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Sales Ma
     return (0, http_1.ok)(res, updated);
 });
 /** DELETE /api/customers/:id */
-router.delete("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (req, res) => {
+router.delete("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const result = await c.customers.deleteOne({ id: req.params.id });
     if (!result.deletedCount)

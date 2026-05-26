@@ -3,12 +3,20 @@ import bcrypt from "bcryptjs";
 
 import { getCollections } from "../db/collections";
 import { authenticate } from "../middleware/auth";
-import type { LoginRequest, RegisterRequest, JwtPayload } from "../types";
+import { normalizeRole } from "../rbac";
+import type { LoginRequest, Permission, RegisterRequest, JwtPayload, RoleName } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 import { signToken } from "../utils/jwt";
 
 const router: Router = express.Router();
+
+async function permissionsForRole(role: RoleName): Promise<Permission[]> {
+  if (role === "Admin") return [];
+  const c = await getCollections();
+  const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
+  return (doc?.permissions ?? []) as Permission[];
+}
 
 /**
  * POST /api/auth/login
@@ -34,11 +42,17 @@ router.post("/login", async (req: Request, res: Response) => {
     return fail(res, "Invalid credentials", 401);
   }
 
-  const token = signToken({ userId: user.id, email: user.email, role: user.role });
+  const role = normalizeRole(user.role);
+  if (role !== user.role) {
+    await c.users.updateOne({ id: user.id }, { $set: { role, updatedAt: new Date() } });
+  }
+
+  const permissions = await permissionsForRole(role);
+  const token = signToken({ userId: user.id, email: user.email, role });
 
   return ok(res, {
     token,
-    user: { id: user.id, name: user.name, email: user.email, role: user.role },
+    user: { id: user.id, name: user.name, email: user.email, role, permissions },
   });
 });
 
@@ -65,6 +79,11 @@ router.post("/register", async (req: Request, res: Response) => {
 
   const c = await getCollections();
   const normalizedEmail = email.trim().toLowerCase();
+  const normalizedRole = normalizeRole(role);
+  const allowedRoles: RoleName[] = ["Admin", "Inventory", "Sales", "Service"];
+  if (!allowedRoles.includes(normalizedRole)) {
+    return fail(res, "Invalid role");
+  }
 
   const alreadyExists = await c.users.findOne({ email: normalizedEmail }, { projection: { id: 1 } });
   if (alreadyExists) return fail(res, "An account with this email already exists");
@@ -77,7 +96,7 @@ router.post("/register", async (req: Request, res: Response) => {
     name,
     email: normalizedEmail,
     mobile,
-    role,
+    role: normalizedRole,
     password,
     submittedAt: new Date(),
   });
@@ -94,8 +113,13 @@ router.get("/me", authenticate, async (req: Request, res: Response) => {
   const c = await getCollections();
   const user = await c.users.findOne({ id: userId });
   if (!user) return fail(res, "User not found", 404);
+  const role = normalizeRole(user.role);
+  if (role !== user.role) {
+    await c.users.updateOne({ id: user.id }, { $set: { role, updatedAt: new Date() } });
+  }
+  const permissions = await permissionsForRole(role);
   const { passwordHash: _, ...safeUser } = user as any;
-  return ok(res, safeUser);
+  return ok(res, { ...safeUser, role, permissions });
 });
 
 export default router;

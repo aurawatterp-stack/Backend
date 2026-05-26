@@ -12,11 +12,13 @@ import type {
   SerialEntry,
   User,
   Notification,
+  Role,
 } from "../types";
 import { getMongoDb } from "./mongo";
 
 export type Collections = {
   users: Collection<User>;
+  roles: Collection<Role>;
   pendingRegistrations: Collection<PendingRegistration>;
   customers: Collection<Customer>;
   products: Collection<Product>;
@@ -33,6 +35,7 @@ export async function getCollections(): Promise<Collections> {
   const db = await getMongoDb();
   return {
     users: db.collection<User>("users"),
+    roles: db.collection<Role>("roles"),
     pendingRegistrations: db.collection<PendingRegistration>("pending_registrations"),
     customers: db.collection<Customer>("customers"),
     products: db.collection<Product>("products"),

@@ -6,6 +6,7 @@ async function getCollections() {
     const db = await (0, mongo_1.getMongoDb)();
     return {
         users: db.collection("users"),
+        roles: db.collection("roles"),
         pendingRegistrations: db.collection("pending_registrations"),
         customers: db.collection("customers"),
         products: db.collection("products"),

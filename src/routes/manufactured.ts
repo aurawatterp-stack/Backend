@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
-import { authenticate, authorize } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { ManufacturedProduct } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -9,7 +9,11 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/manufactured — filter by status, model, dateFrom, dateTo, customer */
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get(
+  "/",
+  authenticate,
+  requireAnyPermission("inventory:manufactured", "sales:entry", "complaints:consumer"),
+  async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", status, model, page = "1", limit = "20" } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};
@@ -24,10 +28,11 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
   const total = await c.manufactured.countDocuments(filter);
   const data = await c.manufactured.find(filter).skip((p - 1) * l).limit(l).toArray();
   return ok(res, { data, total, page: p, limit: l });
-});
+  }
+);
 
 /** POST /api/manufactured — record new production */
-router.post("/", authenticate, authorize("Admin", "Inventory Manager"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { productId, serialNumber, mfgDate, status, invoiceNo, paymentStatus } = req.body;
   if (!productId || !serialNumber || !mfgDate) {
@@ -60,7 +65,7 @@ router.post("/", authenticate, authorize("Admin", "Inventory Manager"), async (r
 });
 
 /** PUT /api/manufactured/:id */
-router.put("/:id", authenticate, authorize("Admin", "Inventory Manager", "Sales Manager"), async (req: Request, res: Response) => {
+router.put("/:id", authenticate, requireAnyPermission("inventory:manufactured", "sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
   const existing = await c.manufactured.findOne({ id });
@@ -71,7 +76,7 @@ router.put("/:id", authenticate, authorize("Admin", "Inventory Manager", "Sales 
 });
 
 /** POST /api/manufactured/:id/return — mark product as returned */
-router.post("/:id/return", authenticate, authorize("Admin", "Inventory Manager"), async (req: Request, res: Response) => {
+router.post("/:id/return", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
   const existing = await c.manufactured.findOne({ id });

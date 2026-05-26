@@ -2,7 +2,7 @@ import express, { type Request, type Response, type Router } from "express";
 import * as fs from "fs";
 
 import { getCollections } from "../db/collections";
-import { authenticate, authorize } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
 import { upload } from "../middleware/upload";
 import type { SerialEntry } from "../types";
 import { fail, ok } from "../utils/http";
@@ -11,7 +11,7 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/serials — filter by series, status */
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("inventory:serials"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", series, status, page = "1", limit = "20" } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};
@@ -34,7 +34,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 router.post(
   "/import",
   authenticate,
-  authorize("Admin", "Inventory Manager"),
+  requireAnyPermission("inventory:serials"),
   upload.single("serials"),
   async (req: Request, res: Response) => {
     const c = await getCollections();

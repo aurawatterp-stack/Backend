@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
-import { authenticate, authorize } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { Customer } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -9,7 +9,7 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/customers — paginated, filterable by name/type */
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("customers:manage", "sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", type, page = "1", limit = "20" } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};
@@ -25,7 +25,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 });
 
 /** GET /api/customers/:id */
-router.get("/:id", authenticate, async (req: Request, res: Response) => {
+router.get("/:id", authenticate, requireAnyPermission("customers:manage", "sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const customer = await c.customers.findOne({ id: req.params.id });
   if (!customer) return fail(res, "Customer not found", 404);
@@ -33,7 +33,7 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 });
 
 /** POST /api/customers */
-router.post("/", authenticate, authorize("Admin", "Sales Manager"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("customers:manage", "sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { name, type, email, phone, address } = req.body;
   if (!name || !type || !email || !phone) {
@@ -55,7 +55,7 @@ router.post("/", authenticate, authorize("Admin", "Sales Manager"), async (req: 
 });
 
 /** PUT /api/customers/:id */
-router.put("/:id", authenticate, authorize("Admin", "Sales Manager"), async (req: Request, res: Response) => {
+router.put("/:id", authenticate, requireAnyPermission("customers:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
   const existing = await c.customers.findOne({ id });
@@ -67,7 +67,7 @@ router.put("/:id", authenticate, authorize("Admin", "Sales Manager"), async (req
 });
 
 /** DELETE /api/customers/:id */
-router.delete("/:id", authenticate, authorize("Admin"), async (req: Request, res: Response) => {
+router.delete("/:id", authenticate, requireAnyPermission("customers:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const result = await c.customers.deleteOne({ id: req.params.id });
   if (!result.deletedCount) return fail(res, "Customer not found", 404);

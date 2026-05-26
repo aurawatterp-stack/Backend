@@ -2,6 +2,8 @@
 Object.defineProperty(exports, "__esModule", { value: true });
 exports.initDatabase = initDatabase;
 const collections_1 = require("./collections");
+const rbac_1 = require("../rbac");
+const id_1 = require("../utils/id");
 async function ensureUniqueIndex(col, fields) {
     await col.createIndex(fields, { unique: true, background: true });
 }
@@ -13,6 +15,9 @@ async function initDatabase() {
     await ensureUniqueIndex(c.users, { id: 1 });
     await ensureUniqueIndex(c.users, { email: 1 });
     await ensureIndex(c.users, { role: 1 });
+    await ensureUniqueIndex(c.roles, { id: 1 });
+    await ensureUniqueIndex(c.roles, { name: 1 });
+    await ensureIndex(c.roles, { updatedAt: -1 });
     await ensureUniqueIndex(c.pendingRegistrations, { id: 1 });
     await ensureUniqueIndex(c.pendingRegistrations, { email: 1 });
     for (const col of [
@@ -33,4 +38,19 @@ async function initDatabase() {
     await ensureIndex(c.notifications, { createdAt: -1 });
     await ensureIndex(c.notifications, { audienceRoles: 1 });
     await ensureIndex(c.notifications, { audienceUserIds: 1 });
+    // Seed system roles (insert-only; never overwrite admin customizations).
+    const now = new Date();
+    for (const name of Object.keys(rbac_1.DEFAULT_ROLE_PERMISSIONS)) {
+        const permissions = rbac_1.DEFAULT_ROLE_PERMISSIONS[name];
+        await c.roles.updateOne({ name }, {
+            $setOnInsert: {
+                id: (0, id_1.generateId)(),
+                name,
+                permissions,
+                isSystem: true,
+                createdAt: now,
+                updatedAt: now,
+            },
+        }, { upsert: true });
+    }
 }

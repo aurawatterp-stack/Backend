@@ -1,13 +1,13 @@
 import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
-import { authenticate } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
 import { ok } from "../utils/http";
 
 const router: Router = express.Router();
 
 /** GET /api/dashboard/stats */
-router.get("/stats", authenticate, async (_req: Request, res: Response) => {
+router.get("/stats", authenticate, requireAnyPermission("dashboard:view"), async (_req: Request, res: Response) => {
   const c = await getCollections();
 
   const rawAgg = await c.rawMaterials
@@ -35,7 +35,7 @@ router.get("/stats", authenticate, async (_req: Request, res: Response) => {
 });
 
 /** GET /api/dashboard/timeline?months=6 */
-router.get("/timeline", authenticate, async (req: Request, res: Response) => {
+router.get("/timeline", authenticate, requireAnyPermission("dashboard:view"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const monthsParam = (req.query.months as string | undefined) ?? "6";
   const months = Math.min(24, Math.max(1, parseInt(monthsParam)));

@@ -45,7 +45,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/serials — filter by series, status */
-router.get("/", auth_1.authenticate, async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:serials"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", series, status, page = "1", limit = "20" } = req.query;
     const filter = {};
@@ -66,7 +66,7 @@ router.get("/", auth_1.authenticate, async (req, res) => {
  * Multipart form: field "serials" = CSV file, field "productSeriesId" = series id
  * CSV format: one serial per line (first column used)
  */
-router.post("/import", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), upload_1.upload.single("serials"), async (req, res) => {
+router.post("/import", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:serials"), upload_1.upload.single("serials"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     if (!req.file)
         return (0, http_1.fail)(res, "CSV file is required");

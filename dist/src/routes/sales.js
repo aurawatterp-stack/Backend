@@ -10,7 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/sales */
-router.get("/", auth_1.authenticate, async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { page = "1", limit = "20" } = req.query;
     const p = Math.max(1, parseInt(page));
@@ -29,7 +29,7 @@ router.get("/", auth_1.authenticate, async (req, res) => {
  * Records a sale. Marks the manufactured product as Sold.
  * Body: { serialNumber, documentType, referenceNo, saleDate, customerId }
  */
-router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Sales Manager", "Inventory Manager"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { serialNumber, documentType, referenceNo, saleDate, customerId } = req.body;
     if (!serialNumber || !documentType || !referenceNo || !saleDate || !customerId) {
@@ -76,7 +76,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Sales Mana
             entityType: "sale",
             entityId: sale.id,
             meta: { serialNumber, referenceNo, customerId },
-            audienceRoles: ["Admin", "Sales Manager", "Inventory Manager"],
+            audienceRoles: ["Admin", "Sales", "Inventory"],
             readBy: [],
             createdBy: user.userId,
             createdAt: new Date(),

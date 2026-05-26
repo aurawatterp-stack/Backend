@@ -1,10 +1,31 @@
-export type UserRole = "Admin" | "Inventory Manager" | "Sales Manager" | "Distributor";
+export type SystemRoleName = "Admin" | "Inventory" | "Sales" | "Service" | "Distributor";
+export type RoleName = string;
+/** Stored user role (may include legacy or custom role names). */
+export type UserRole = string;
+
+export type Permission =
+  | "dashboard:view"
+  | "users:manage"
+  | "roles:manage"
+  | "customers:manage"
+  | "distributors:manage"
+  | "inventory:serials"
+  | "inventory:products"
+  | "inventory:raw-materials"
+  | "inventory:manufactured"
+  | "sales:entry"
+  | "complaints:consumer"
+  | "complaints:supplier";
 
 export type JwtPayload = {
   userId: string;
   email: string;
-  role: UserRole;
+  /** Canonical role name (normalized). */
+  role: RoleName;
 };
+
+/** `req.user` after authentication (JWT + resolved permissions). */
+export type AuthUser = JwtPayload & { permissions: Permission[] };
 
 export type LoginRequest = {
   email: string;
@@ -29,6 +50,15 @@ export type User = {
   mobile: string;
   role: UserRole;
   isActive: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type Role = {
+  id: string;
+  name: RoleName;
+  permissions: Permission[];
+  isSystem: boolean;
   createdAt: Date;
   updatedAt: Date;
 };

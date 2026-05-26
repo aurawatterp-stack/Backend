@@ -10,7 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/distributors */
-router.get("/", auth_1.authenticate, async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("distributors:manage"), async (req, res) => {
     const { q = "" } = req.query;
     const c = await (0, collections_1.getCollections)();
     const filter = {};
@@ -20,7 +20,7 @@ router.get("/", auth_1.authenticate, async (req, res) => {
     return (0, http_1.ok)(res, results);
 });
 /** GET /api/distributors/:id */
-router.get("/:id", auth_1.authenticate, async (req, res) => {
+router.get("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("distributors:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const dist = await c.distributors.findOne({ id: req.params.id });
     if (!dist)
@@ -28,7 +28,7 @@ router.get("/:id", auth_1.authenticate, async (req, res) => {
     return (0, http_1.ok)(res, dist);
 });
 /** POST /api/distributors */
-router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("distributors:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { name, email, mobile, address } = req.body;
     if (!name || !email || !mobile || !address) {
@@ -49,7 +49,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (req
     return (0, http_1.ok)(res, distributor, 201);
 });
 /** PUT /api/distributors/:id */
-router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (req, res) => {
+router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("distributors:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.distributors.findOne({ id });
@@ -60,7 +60,7 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (r
     return (0, http_1.ok)(res, { ...existing, ...req.body, updatedAt });
 });
 /** DELETE /api/distributors/:id */
-router.delete("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (req, res) => {
+router.delete("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("distributors:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const result = await c.distributors.deleteOne({ id: req.params.id });
     if (!result.deletedCount)

@@ -10,7 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/manufactured — filter by status, model, dateFrom, dateTo, customer */
-router.get("/", auth_1.authenticate, async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "sales:entry", "complaints:consumer"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", status, model, page = "1", limit = "20" } = req.query;
     const filter = {};
@@ -28,7 +28,7 @@ router.get("/", auth_1.authenticate, async (req, res) => {
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
 /** POST /api/manufactured — record new production */
-router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { productId, serialNumber, mfgDate, status, invoiceNo, paymentStatus } = req.body;
     if (!productId || !serialNumber || !mfgDate) {
@@ -56,7 +56,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory 
     return (0, http_1.ok)(res, entry, 201);
 });
 /** PUT /api/manufactured/:id */
-router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager", "Sales Manager"), async (req, res) => {
+router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.manufactured.findOne({ id });
@@ -67,7 +67,7 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventor
     return (0, http_1.ok)(res, { ...existing, ...req.body, updatedAt });
 });
 /** POST /api/manufactured/:id/return — mark product as returned */
-router.post("/:id/return", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), async (req, res) => {
+router.post("/:id/return", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.manufactured.findOne({ id });

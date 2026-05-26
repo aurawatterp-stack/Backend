@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
-import { authenticate, authorize } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { JwtPayload, Notification, Sale } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -9,7 +9,7 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/sales */
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { page = "1", limit = "20" } = req.query as Record<string, string>;
   const p = Math.max(1, parseInt(page));
@@ -29,7 +29,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
  * Records a sale. Marks the manufactured product as Sold.
  * Body: { serialNumber, documentType, referenceNo, saleDate, customerId }
  */
-router.post("/", authenticate, authorize("Admin", "Sales Manager", "Inventory Manager"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { serialNumber, documentType, referenceNo, saleDate, customerId } = req.body;
   if (!serialNumber || !documentType || !referenceNo || !saleDate || !customerId) {
@@ -82,7 +82,7 @@ router.post("/", authenticate, authorize("Admin", "Sales Manager", "Inventory Ma
       entityType: "sale",
       entityId: sale.id,
       meta: { serialNumber, referenceNo, customerId },
-      audienceRoles: ["Admin", "Sales Manager", "Inventory Manager"],
+      audienceRoles: ["Admin", "Sales", "Inventory"],
       readBy: [],
       createdBy: user.userId,
       createdAt: new Date(),

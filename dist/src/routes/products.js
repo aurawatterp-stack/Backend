@@ -10,7 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/products */
-router.get("/", auth_1.authenticate, async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:products", "complaints:consumer"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", series } = req.query;
     const filter = {};
@@ -23,13 +23,13 @@ router.get("/", auth_1.authenticate, async (req, res) => {
     return (0, http_1.ok)(res, results);
 });
 /** GET /api/products/series — unique series list */
-router.get("/series", auth_1.authenticate, async (_req, res) => {
+router.get("/series", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:products"), async (_req, res) => {
     const c = await (0, collections_1.getCollections)();
     const series = await c.products.distinct("series");
     return (0, http_1.ok)(res, series);
 });
 /** POST /api/products */
-router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:products"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { series, model, description } = req.body;
     if (!series || !model)
@@ -42,7 +42,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory 
     return (0, http_1.ok)(res, product, 201);
 });
 /** PUT /api/products/:id */
-router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), async (req, res) => {
+router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:products"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.products.findOne({ id });
@@ -53,7 +53,7 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventor
     return (0, http_1.ok)(res, updated);
 });
 /** DELETE /api/products/:id */
-router.delete("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (req, res) => {
+router.delete("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:products"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const result = await c.products.deleteOne({ id: req.params.id });
     if (!result.deletedCount)

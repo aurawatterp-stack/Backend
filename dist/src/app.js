@@ -21,6 +21,7 @@ const complaints_1 = __importDefault(require("./routes/complaints"));
 const distributors_1 = __importDefault(require("./routes/distributors"));
 const dashboard_1 = __importDefault(require("./routes/dashboard"));
 const notifications_1 = __importDefault(require("./routes/notifications"));
+const roles_1 = __importDefault(require("./routes/roles"));
 const app = (0, express_1.default)();
 // Global middleware
 app.use((0, helmet_1.default)());
@@ -56,6 +57,7 @@ app.use("/api/complaints", complaints_1.default);
 app.use("/api/distributors", distributors_1.default);
 app.use("/api/dashboard", dashboard_1.default);
 app.use("/api/notifications", notifications_1.default);
+app.use("/api/roles", roles_1.default);
 // 404 fallback
 app.use((req, res) => {
     res.status(404).json({

@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
-import { authenticate, authorize } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { Product } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -9,7 +9,7 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/products */
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("inventory:products", "complaints:consumer"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", series } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};
@@ -22,14 +22,14 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 });
 
 /** GET /api/products/series — unique series list */
-router.get("/series", authenticate, async (_req: Request, res: Response) => {
+router.get("/series", authenticate, requireAnyPermission("inventory:products"), async (_req: Request, res: Response) => {
   const c = await getCollections();
   const series = await c.products.distinct("series");
   return ok(res, series);
 });
 
 /** POST /api/products */
-router.post("/", authenticate, authorize("Admin", "Inventory Manager"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("inventory:products"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { series, model, description } = req.body;
   if (!series || !model) return fail(res, "series and model are required");
@@ -43,7 +43,7 @@ router.post("/", authenticate, authorize("Admin", "Inventory Manager"), async (r
 });
 
 /** PUT /api/products/:id */
-router.put("/:id", authenticate, authorize("Admin", "Inventory Manager"), async (req: Request, res: Response) => {
+router.put("/:id", authenticate, requireAnyPermission("inventory:products"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
   const existing = await c.products.findOne({ id });
@@ -54,7 +54,7 @@ router.put("/:id", authenticate, authorize("Admin", "Inventory Manager"), async 
 });
 
 /** DELETE /api/products/:id */
-router.delete("/:id", authenticate, authorize("Admin"), async (req: Request, res: Response) => {
+router.delete("/:id", authenticate, requireAnyPermission("inventory:products"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const result = await c.products.deleteOne({ id: req.params.id });
   if (!result.deletedCount) return fail(res, "Product not found", 404);

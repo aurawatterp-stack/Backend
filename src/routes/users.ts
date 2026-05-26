@@ -3,7 +3,8 @@ import bcrypt from "bcryptjs";
 
 import { CONFIG } from "../config";
 import { getCollections } from "../db/collections";
-import { authenticate, authorize } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
+import { normalizeRole } from "../rbac";
 import type { User } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -14,7 +15,7 @@ const router: Router = express.Router();
  * GET /api/users
  * Admin only. Returns all users.
  */
-router.get("/", authenticate, authorize("Admin"), async (_req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("users:manage"), async (_req: Request, res: Response) => {
   const c = await getCollections();
   const users = await c.users.find({}).toArray();
   const safe = users.map(({ passwordHash: _, ...u }) => u);
@@ -25,7 +26,7 @@ router.get("/", authenticate, authorize("Admin"), async (_req: Request, res: Res
  * GET /api/users/pending-registrations
  * Admin only. Returns pending registration requests.
  */
-router.get("/pending-registrations", authenticate, authorize("Admin"), async (_req: Request, res: Response) => {
+router.get("/pending-registrations", authenticate, requireAnyPermission("users:manage"), async (_req: Request, res: Response) => {
   const c = await getCollections();
   const pending = await c.pendingRegistrations.find({}, { projection: { password: 0 } }).toArray();
   return ok(res, pending);
@@ -35,7 +36,7 @@ router.get("/pending-registrations", authenticate, authorize("Admin"), async (_r
  * POST /api/users/approve/:id
  * Admin only. Approves a pending registration by id.
  */
-router.post("/approve/:id", authenticate, authorize("Admin"), async (req: Request, res: Response) => {
+router.post("/approve/:id", authenticate, requireAnyPermission("users:manage"), async (req: Request, res: Response) => {
   const { id } = req.params;
   const c = await getCollections();
   const pending = await c.pendingRegistrations.findOne({ id });
@@ -48,7 +49,7 @@ router.post("/approve/:id", authenticate, authorize("Admin"), async (req: Reques
     passwordHash,
     name: pending.name,
     mobile: pending.mobile,
-    role: pending.role,
+    role: normalizeRole(pending.role),
     isActive: true,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -65,7 +66,7 @@ router.post("/approve/:id", authenticate, authorize("Admin"), async (req: Reques
  * PUT /api/users/:id
  * Admin only. Update user details.
  */
-router.put("/:id", authenticate, authorize("Admin"), async (req: Request, res: Response) => {
+router.put("/:id", authenticate, requireAnyPermission("users:manage"), async (req: Request, res: Response) => {
   const { id } = req.params;
   const { name, mobile, role, isActive, password } = req.body;
   const c = await getCollections();
@@ -75,7 +76,7 @@ router.put("/:id", authenticate, authorize("Admin"), async (req: Request, res: R
   const update: Partial<User> = { updatedAt: new Date() };
   if (name) update.name = name;
   if (mobile) update.mobile = mobile;
-  if (role) update.role = role;
+  if (role) update.role = normalizeRole(role);
   if (isActive !== undefined) update.isActive = Boolean(isActive);
   if (password) update.passwordHash = await bcrypt.hash(password, CONFIG.BCRYPT_ROUNDS);
 
@@ -89,7 +90,7 @@ router.put("/:id", authenticate, authorize("Admin"), async (req: Request, res: R
  * DELETE /api/users/:id
  * Admin only.
  */
-router.delete("/:id", authenticate, authorize("Admin"), async (req: Request, res: Response) => {
+router.delete("/:id", authenticate, requireAnyPermission("users:manage"), async (req: Request, res: Response) => {
   const { id } = req.params;
   const c = await getCollections();
   const result = await c.users.deleteOne({ id });

@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
-import { authenticate, authorize } from "../middleware/auth";
+import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { Distributor } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -9,7 +9,7 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/distributors */
-router.get("/", authenticate, async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("distributors:manage"), async (req: Request, res: Response) => {
   const { q = "" } = req.query as Record<string, string>;
   const c = await getCollections();
   const filter: Record<string, unknown> = {};
@@ -19,7 +19,7 @@ router.get("/", authenticate, async (req: Request, res: Response) => {
 });
 
 /** GET /api/distributors/:id */
-router.get("/:id", authenticate, async (req: Request, res: Response) => {
+router.get("/:id", authenticate, requireAnyPermission("distributors:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const dist = await c.distributors.findOne({ id: req.params.id });
   if (!dist) return fail(res, "Distributor not found", 404);
@@ -27,7 +27,7 @@ router.get("/:id", authenticate, async (req: Request, res: Response) => {
 });
 
 /** POST /api/distributors */
-router.post("/", authenticate, authorize("Admin"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("distributors:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { name, email, mobile, address } = req.body;
   if (!name || !email || !mobile || !address) {
@@ -49,7 +49,7 @@ router.post("/", authenticate, authorize("Admin"), async (req: Request, res: Res
 });
 
 /** PUT /api/distributors/:id */
-router.put("/:id", authenticate, authorize("Admin"), async (req: Request, res: Response) => {
+router.put("/:id", authenticate, requireAnyPermission("distributors:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
   const existing = await c.distributors.findOne({ id });
@@ -60,7 +60,7 @@ router.put("/:id", authenticate, authorize("Admin"), async (req: Request, res: R
 });
 
 /** DELETE /api/distributors/:id */
-router.delete("/:id", authenticate, authorize("Admin"), async (req: Request, res: Response) => {
+router.delete("/:id", authenticate, requireAnyPermission("distributors:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const result = await c.distributors.deleteOne({ id: req.params.id });
   if (!result.deletedCount) return fail(res, "Distributor not found", 404);

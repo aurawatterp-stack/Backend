@@ -17,6 +17,7 @@ import complaintsRouter from "./routes/complaints";
 import distributorsRouter from "./routes/distributors";
 import dashboardRouter from "./routes/dashboard";
 import notificationsRouter from "./routes/notifications";
+import rolesRouter from "./routes/roles";
 
 const app = express();
 
@@ -58,6 +59,7 @@ app.use("/api/complaints", complaintsRouter);
 app.use("/api/distributors", distributorsRouter);
 app.use("/api/dashboard", dashboardRouter);
 app.use("/api/notifications", notificationsRouter);
+app.use("/api/roles", rolesRouter);
 
 // 404 fallback
 app.use((req, res) => {

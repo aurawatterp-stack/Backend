@@ -10,7 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/raw-materials — filter by series, batch, vendor, dateFrom, dateTo */
-router.get("/", auth_1.authenticate, async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:raw-materials", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", series, batch, vendor, page = "1", limit = "20" } = req.query;
     const filter = {};
@@ -30,7 +30,7 @@ router.get("/", auth_1.authenticate, async (req, res) => {
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
 /** POST /api/raw-materials */
-router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:raw-materials"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { productSeriesId, materialName, dateReceived, billType, referenceNo, quantityReceived, vendorName, batch, notes } = req.body;
     if (!productSeriesId || !materialName || !dateReceived || !billType || !referenceNo || !quantityReceived || !vendorName || !batch) {
@@ -63,7 +63,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory 
             entityType: "raw_material",
             entityId: entry.id,
             meta: { materialName, batch, referenceNo, productSeriesId },
-            audienceRoles: ["Admin", "Inventory Manager"],
+            audienceRoles: ["Admin", "Inventory"],
             readBy: [],
             createdBy: user.userId,
             createdAt: new Date(),
@@ -76,7 +76,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory 
     return (0, http_1.ok)(res, entry, 201);
 });
 /** PUT /api/raw-materials/:id */
-router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), async (req, res) => {
+router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:raw-materials"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.rawMaterials.findOne({ id });
@@ -87,7 +87,7 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventor
     return (0, http_1.ok)(res, { ...existing, ...req.body, updatedAt });
 });
 /** DELETE /api/raw-materials/:id */
-router.delete("/:id", auth_1.authenticate, (0, auth_1.authorize)("Admin", "Inventory Manager"), async (req, res) => {
+router.delete("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:raw-materials"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const result = await c.rawMaterials.deleteOne({ id: req.params.id });
     if (!result.deletedCount)

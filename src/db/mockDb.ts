@@ -62,6 +62,17 @@ export const db = {
       updatedAt: new Date(),
     },
     {
+      id: "u6",
+      email: "service@avavbusiness.com",
+      passwordHash: bcrypt.hashSync("Service@123", 10),
+      name: "Service Team",
+      mobile: "9380482094",
+      role: "Service" as UserRole,
+      isActive: true,
+      createdAt: new Date(),
+      updatedAt: new Date(),
+    },
+    {
       id: "u5",
       email: "h2solar08@gmail.com",
       passwordHash: bcrypt.hashSync("H2Solar@123", 10),
