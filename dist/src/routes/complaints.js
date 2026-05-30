@@ -54,7 +54,7 @@ router.get("/stats", auth_1.authenticate, (0, auth_1.requireAnyPermission)("comp
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription } = req.body;
+    const { type, productSerialNo, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, initialAction, trackingNotes, escalationLevel, technicalDiagnosis, spareRequired, spareName, spareInventoryStatus, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, } = req.body;
     if (!type || !dateOfComplaint || !issueDescription) {
         return (0, http_1.fail)(res, "type, dateOfComplaint, issueDescription are required");
     }
@@ -72,6 +72,22 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         dateOfSale: dateOfSale ? new Date(dateOfSale) : undefined,
         dateOfComplaint: new Date(dateOfComplaint),
         issueDescription,
+        ticketSource,
+        l1Sla,
+        initialAction,
+        trackingNotes,
+        escalationLevel,
+        technicalDiagnosis,
+        spareRequired,
+        spareName,
+        spareInventoryStatus,
+        dispatchPlan,
+        siteVisitRequired,
+        engineerName,
+        l3SupportRequired,
+        finalResolution,
+        clientFeedback,
+        closureReport,
         status: "Open at Aurawatt",
         raisedBy: user.userId,
         createdAt: new Date(),

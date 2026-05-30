@@ -26,38 +26,46 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:ent
 });
 /**
  * POST /api/sales
- * Records a sale. Marks the manufactured product as Sold.
- * Body: { serialNumber, documentType, referenceNo, saleDate, customerId }
+ * Records a sales workflow entry. If serialNumber is supplied, also marks
+ * the manufactured product as Sold for backward-compatible serial sales.
  */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { serialNumber, documentType, referenceNo, saleDate, customerId } = req.body;
-    if (!serialNumber || !documentType || !referenceNo || !saleDate || !customerId) {
-        return (0, http_1.fail)(res, "serialNumber, documentType, referenceNo, saleDate, customerId are required");
+    const { serialNumber, documentType, referenceNo, saleDate, customerId, registrationCode, materialName, quantity, stateRegion, dealerRegistered, rjApprovalStatus, forcePiPermission, priceCategory, availableQuantity, inventoryStatus, forcePiApprovalStatus, expectedDispatchDate, dispatchStatus, paymentStatus, } = req.body;
+    if (!documentType || !referenceNo || !saleDate || !customerId) {
+        return (0, http_1.fail)(res, "documentType, referenceNo, saleDate, customerId are required");
     }
-    const mfg = await c.manufactured.findOne({ serialNumber });
-    if (!mfg)
-        return (0, http_1.fail)(res, "Serial number not found in manufactured products");
-    if (mfg.status === "Sold")
-        return (0, http_1.fail)(res, "This product is already sold");
+    const isWorkflowEntry = Boolean(registrationCode || materialName || quantity || stateRegion);
+    if (!isWorkflowEntry && !serialNumber) {
+        return (0, http_1.fail)(res, "serialNumber is required for legacy sale entries");
+    }
+    if (isWorkflowEntry && (!registrationCode || !materialName || !quantity || !stateRegion)) {
+        return (0, http_1.fail)(res, "registrationCode, materialName, quantity and stateRegion are required");
+    }
     const customer = await c.customers.findOne({ id: customerId }, { projection: { id: 1 } });
     if (!customer)
         return (0, http_1.fail)(res, "Customer not found", 404);
     const user = req.user;
-    const updatedAt = new Date();
-    await c.manufactured.updateOne({ id: mfg.id }, {
-        $set: {
-            status: "Sold",
-            invoiceNo: referenceNo,
-            customerId,
-            soldDate: new Date(saleDate),
-            paymentStatus: "Pending",
-            updatedAt,
-        },
-    });
+    if (serialNumber) {
+        const mfg = await c.manufactured.findOne({ serialNumber });
+        if (!mfg)
+            return (0, http_1.fail)(res, "Serial number not found in manufactured products");
+        if (mfg.status === "Sold")
+            return (0, http_1.fail)(res, "This product is already sold");
+        const updatedAt = new Date();
+        await c.manufactured.updateOne({ id: mfg.id }, {
+            $set: {
+                status: "Sold",
+                invoiceNo: referenceNo,
+                customerId,
+                soldDate: new Date(saleDate),
+                paymentStatus: paymentStatus === "Confirmed" ? "Verified" : "Pending",
+                updatedAt,
+            },
+        });
+    }
     const sale = {
         id: (0, id_1.generateId)(),
-        serialNumber,
         documentType,
         referenceNo,
         saleDate: new Date(saleDate),
@@ -65,17 +73,47 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
         createdBy: user.userId,
         createdAt: new Date(),
     };
+    if (serialNumber)
+        sale.serialNumber = String(serialNumber);
+    if (registrationCode)
+        sale.registrationCode = String(registrationCode);
+    if (materialName)
+        sale.materialName = String(materialName);
+    if (quantity)
+        sale.quantity = Number(quantity);
+    if (stateRegion)
+        sale.stateRegion = String(stateRegion);
+    if (typeof dealerRegistered === "boolean")
+        sale.dealerRegistered = dealerRegistered;
+    if (rjApprovalStatus)
+        sale.rjApprovalStatus = rjApprovalStatus;
+    if (typeof forcePiPermission === "boolean")
+        sale.forcePiPermission = forcePiPermission;
+    if (priceCategory)
+        sale.priceCategory = priceCategory;
+    if (availableQuantity !== undefined && availableQuantity !== null)
+        sale.availableQuantity = Number(availableQuantity);
+    if (inventoryStatus)
+        sale.inventoryStatus = inventoryStatus;
+    if (forcePiApprovalStatus)
+        sale.forcePiApprovalStatus = forcePiApprovalStatus;
+    if (expectedDispatchDate)
+        sale.expectedDispatchDate = new Date(expectedDispatchDate);
+    if (dispatchStatus)
+        sale.dispatchStatus = dispatchStatus;
+    if (paymentStatus)
+        sale.paymentStatus = paymentStatus;
     await c.sales.insertOne(sale);
     // Best-effort notification (never fail the main operation).
     try {
         const notification = {
             id: (0, id_1.generateId)(),
             type: "sale_recorded",
-            title: "New Sale Recorded",
-            body: `${serialNumber} • ${referenceNo}`,
+            title: isWorkflowEntry ? "New Sales Workflow PI" : "New Sale Recorded",
+            body: `${referenceNo} • ${materialName || serialNumber || "Sales workflow"}`,
             entityType: "sale",
             entityId: sale.id,
-            meta: { serialNumber, referenceNo, customerId },
+            meta: { serialNumber, referenceNo, customerId, materialName, quantity, stateRegion },
             audienceRoles: ["Admin", "Sales", "Inventory"],
             readBy: [],
             createdBy: user.userId,
