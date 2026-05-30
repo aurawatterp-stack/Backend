@@ -1,5 +1,6 @@
 import express, { type Request, type Response, type Router } from "express";
 
+
 import { getCollections } from "../db/collections";
 import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { AuthUser, Complaint } from "../types";
