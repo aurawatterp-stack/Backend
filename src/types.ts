@@ -164,6 +164,10 @@ export type Complaint = {
   id: string;
   type: ComplaintType;
   productSerialNo?: string;
+  customerId?: string;
+  customerName?: string;
+  customerPhone?: string;
+  customerEmail?: string;
   rawMaterialId?: string;
   rawMaterialName?: string;
   vendorName?: string;
