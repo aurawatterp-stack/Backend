@@ -30,7 +30,7 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory
 /** POST /api/manufactured — record new production */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { productId, serialNumber, mfgDate, status, invoiceNo, paymentStatus } = req.body;
+    const { productId, serialNumber, mfgDate, status, invoiceNo, paymentStatus, bomUsage } = req.body;
     if (!productId || !serialNumber || !mfgDate) {
         return (0, http_1.fail)(res, "productId, serialNumber, mfgDate are required");
     }
@@ -49,6 +49,16 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
         status: normalizedStatus,
         invoiceNo: invoiceNo ? String(invoiceNo) : undefined,
         paymentStatus: normalizedPayment,
+        bomUsage: Array.isArray(bomUsage)
+            ? bomUsage.map((item) => ({
+                rawMaterialId: item.rawMaterialId ? String(item.rawMaterialId) : undefined,
+                materialName: String(item.materialName ?? ""),
+                batch: item.batch ? String(item.batch) : undefined,
+                invoiceNo: item.invoiceNo ? String(item.invoiceNo) : undefined,
+                vendorName: item.vendorName ? String(item.vendorName) : undefined,
+                quantityUsed: Number(item.quantityUsed) || 0,
+            })).filter((item) => item.materialName && item.quantityUsed > 0)
+            : undefined,
         createdAt: new Date(),
         updatedAt: new Date(),
     };

@@ -90,7 +90,11 @@ export async function getMongoClient(): Promise<MongoClient> {
       }
       throw err;
     }
-  })();
+  })().catch((err) => {
+    clientPromise = null;
+    dbPromise = null;
+    throw err;
+  });
 
   return clientPromise;
 }

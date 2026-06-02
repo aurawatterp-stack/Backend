@@ -26,6 +26,8 @@ export async function initDatabase() {
 
   await ensureUniqueIndex(c.pendingRegistrations, { id: 1 });
   await ensureUniqueIndex(c.pendingRegistrations, { email: 1 });
+  await ensureUniqueIndex(c.pendingCustomerRegistrations, { id: 1 });
+  await ensureUniqueIndex(c.pendingCustomerRegistrations, { email: 1 });
 
   for (const col of [
     c.customers,

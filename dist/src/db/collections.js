@@ -8,6 +8,7 @@ async function getCollections() {
         users: db.collection("users"),
         roles: db.collection("roles"),
         pendingRegistrations: db.collection("pending_registrations"),
+        pendingCustomerRegistrations: db.collection("pending_customer_registrations"),
         customers: db.collection("customers"),
         products: db.collection("products"),
         rawMaterials: db.collection("raw_materials"),

@@ -42,6 +42,18 @@ export type RegisterRequest = {
 
 export type PendingRegistration = RegisterRequest & { id: string; submittedAt: Date };
 
+export type PendingCustomerRegistration = {
+  id: string;
+  name: string;
+  type: CustomerType;
+  email: string;
+  phone: string;
+  address?: string;
+  registrationCode?: string;
+  requestedBy: string;
+  submittedAt: Date;
+};
+
 export type User = {
   id: string;
   email: string;
@@ -111,6 +123,14 @@ export type ManufacturedProduct = {
   status: ManufacturedStatus;
   invoiceNo?: string;
   paymentStatus: PaymentStatus;
+  bomUsage?: {
+    rawMaterialId?: string;
+    materialName: string;
+    batch?: string;
+    invoiceNo?: string;
+    vendorName?: string;
+    quantityUsed: number;
+  }[];
   customerId?: string;
   soldDate?: Date;
   returnReason?: string;
@@ -213,6 +233,7 @@ export type NotificationType =
   | "raw_material_received"
   | "manufactured_created"
   | "complaint_created"
+  | "customer_registration_requested"
   | "user_registered";
 
 export type Notification = {

@@ -84,7 +84,11 @@ async function getMongoClient() {
             }
             throw err;
         }
-    })();
+    })().catch((err) => {
+        clientPromise = null;
+        dbPromise = null;
+        throw err;
+    });
     return clientPromise;
 }
 async function getMongoDb() {
