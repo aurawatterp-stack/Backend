@@ -158,4 +158,7 @@ exports.CONFIG = {
     BCRYPT_ROUNDS: num("BCRYPT_ROUNDS", 10),
     CORS_ORIGIN: corsOriginsFromEnv(process.env.CORS_ORIGIN),
     UPLOAD_DIR: uploadDirAbs,
+    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME?.trim() || "",
+    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY?.trim() || "",
+    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET?.trim() || "",
 };

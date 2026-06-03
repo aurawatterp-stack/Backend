@@ -10,7 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/products */
-router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:products", "complaints:consumer"), async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:products", "sales:entry", "complaints:consumer"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", series } = req.query;
     const filter = {};

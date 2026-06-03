@@ -7,6 +7,15 @@ const id_1 = require("../utils/id");
 async function ensureUniqueIndex(col, fields) {
     await col.createIndex(fields, { unique: true, background: true });
 }
+async function ensureSparseUniqueIndex(col, fields) {
+    const targetName = Object.entries(fields).map(([key, value]) => `${key}_${value}`).join("_");
+    const indexes = await col.indexes();
+    const existing = indexes.find((index) => index.name === targetName);
+    if (existing && !existing.sparse) {
+        await col.dropIndex(targetName);
+    }
+    await col.createIndex(fields, { unique: true, sparse: true, background: true });
+}
 async function ensureIndex(col, fields) {
     await col.createIndex(fields, { background: true });
 }
@@ -21,7 +30,7 @@ async function initDatabase() {
     await ensureUniqueIndex(c.pendingRegistrations, { id: 1 });
     await ensureUniqueIndex(c.pendingRegistrations, { email: 1 });
     await ensureUniqueIndex(c.pendingCustomerRegistrations, { id: 1 });
-    await ensureUniqueIndex(c.pendingCustomerRegistrations, { email: 1 });
+    await ensureSparseUniqueIndex(c.pendingCustomerRegistrations, { email: 1 });
     for (const col of [
         c.customers,
         c.products,
