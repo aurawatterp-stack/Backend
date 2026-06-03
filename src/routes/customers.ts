@@ -54,7 +54,7 @@ function normalizeCustomerDocuments(documentsUploaded: unknown): CustomerDocumen
 }
 
 /** GET /api/customers — paginated, filterable by name/type */
-router.get("/", authenticate, requireAnyPermission("customers:manage", "sales:entry"), async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("customers:manage", "sales:entry", "dispatch:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", type, page = "1", limit = "20" } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};

@@ -11,16 +11,18 @@ export const ALL_PERMISSIONS: Permission[] = [
   "inventory:raw-materials",
   "inventory:manufactured",
   "sales:entry",
+  "dispatch:manage",
   "complaints:consumer",
   "complaints:supplier",
 ];
 
-export const SYSTEM_ROLES: SystemRoleName[] = ["Admin", "Inventory", "Sales", "Service", "Distributor"];
+export const SYSTEM_ROLES: SystemRoleName[] = ["Admin", "Inventory", "Sales", "Dispatch", "Service", "Distributor"];
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
   Admin: ALL_PERMISSIONS,
   Inventory: ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured"],
   Sales: ["dashboard:view", "sales:entry"],
+  Dispatch: ["dashboard:view", "dispatch:manage"],
   Service: ["dashboard:view", "complaints:consumer", "complaints:supplier"],
   Distributor: ["dashboard:view"],
 };
@@ -29,6 +31,7 @@ export const ROLE_ALIASES: Record<SystemRoleName, UserRole[]> = {
   Admin: ["Admin"],
   Inventory: ["Inventory", "Inventory Manager"],
   Sales: ["Sales", "Sales Manager"],
+  Dispatch: ["Dispatch", "Dispatch Team"],
   Service: ["Service"],
   Distributor: ["Distributor"],
 };
@@ -51,6 +54,7 @@ export function normalizeRole(input: unknown): RoleName {
   if (key === "admin") return "Admin";
   if (key === "inventory" || key === "inventory manager") return "Inventory";
   if (key === "sales" || key === "sales manager") return "Sales";
+  if (key === "dispatch" || key === "dispatch team") return "Dispatch";
   if (key === "service" || key === "service manager") return "Service";
   if (key === "distributor") return "Distributor";
 

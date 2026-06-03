@@ -16,6 +16,25 @@ const dispatchDocketUpload = multer({
   limits: { fileSize: MAX_DISPATCH_DOCKET_BYTES },
 });
 
+function parsePiItems(value: unknown): Sale["piItems"] {
+  if (!Array.isArray(value)) return undefined;
+  const parsed: NonNullable<Sale["piItems"]> = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const row = item as Record<string, unknown>;
+    const materialName = String(row.materialName ?? "").trim();
+    const quantity = Number(row.quantity);
+    const rate = Number(row.rate);
+    const gstRate = Number(row.gstRate);
+    const hsnSac = String(row.hsnSac ?? "8504").trim() || "8504";
+    if (!materialName || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(rate) || rate < 0 || !Number.isFinite(gstRate) || gstRate < 0) {
+      continue;
+    }
+    parsed.push({ materialName, hsnSac, quantity, rate, gstRate });
+  }
+  return parsed;
+}
+
 function runDispatchDocketUpload(req: Request, res: Response, next: NextFunction) {
   dispatchDocketUpload.single("docket")(req, res, (err: unknown) => {
     if (!err) return next();
@@ -37,7 +56,7 @@ function runPiUpload(req: Request, res: Response, next: NextFunction) {
 }
 
 /** GET /api/sales */
-router.get("/", authenticate, requireAnyPermission("sales:entry"), async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("sales:entry", "dispatch:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { page = "1", limit = "20" } = req.query as Record<string, string>;
   const p = Math.max(1, parseInt(page));
@@ -63,6 +82,7 @@ router.put("/:id/force-pi", authenticate, authorize("Admin"), async (req: Reques
     registrationCode,
     materialName,
     quantity,
+    piItems,
     stateRegion,
     dealerRegistered,
     priceCategory,
@@ -89,6 +109,13 @@ router.put("/:id/force-pi", authenticate, authorize("Admin"), async (req: Reques
   if (registrationCode !== undefined) update.registrationCode = String(registrationCode);
   if (materialName !== undefined) update.materialName = String(materialName);
   if (quantity !== undefined && quantity !== null) update.quantity = Number(quantity);
+  if (piItems !== undefined) {
+    const parsedPiItems = parsePiItems(piItems);
+    if (!parsedPiItems?.length) return fail(res, "At least one valid PI item is required");
+    update.piItems = parsedPiItems;
+    update.materialName = parsedPiItems[0].materialName;
+    update.quantity = parsedPiItems.reduce((sum, item) => sum + item.quantity, 0);
+  }
   if (stateRegion !== undefined) update.stateRegion = String(stateRegion);
   if (typeof dealerRegistered === "boolean") update.dealerRegistered = dealerRegistered;
   if (priceCategory !== undefined) update.priceCategory = priceCategory;
@@ -112,6 +139,7 @@ router.post("/:id/approve-force-pi", authenticate, authorize("Admin"), async (re
     registrationCode,
     materialName,
     quantity,
+    piItems,
     stateRegion,
     priceCategory,
     availableQuantity,
@@ -136,6 +164,13 @@ router.post("/:id/approve-force-pi", authenticate, authorize("Admin"), async (re
   if (registrationCode !== undefined) update.registrationCode = String(registrationCode);
   if (materialName !== undefined) update.materialName = String(materialName);
   if (quantity !== undefined && quantity !== null) update.quantity = Number(quantity);
+  if (piItems !== undefined) {
+    const parsedPiItems = parsePiItems(piItems);
+    if (!parsedPiItems?.length) return fail(res, "At least one valid PI item is required");
+    update.piItems = parsedPiItems;
+    update.materialName = parsedPiItems[0].materialName;
+    update.quantity = parsedPiItems.reduce((sum, item) => sum + item.quantity, 0);
+  }
   if (stateRegion !== undefined) update.stateRegion = String(stateRegion);
   if (priceCategory !== undefined) update.priceCategory = priceCategory;
   if (availableQuantity !== undefined && availableQuantity !== null) update.availableQuantity = Number(availableQuantity);
@@ -153,7 +188,7 @@ router.post("/:id/approve-force-pi", authenticate, authorize("Admin"), async (re
 router.post(
   "/upload-docket",
   authenticate,
-  requireAnyPermission("sales:entry"),
+  requireAnyPermission("dispatch:manage"),
   runDispatchDocketUpload,
   async (req: Request, res: Response) => {
     const file = req.file;
@@ -215,6 +250,94 @@ router.post(
   }
 );
 
+router.put("/:id/sales-dispatch", authenticate, requireAnyPermission("sales:entry"), async (req: Request, res: Response) => {
+  const c = await getCollections();
+  const { id } = req.params;
+  const { saleDate, piAttachmentName, piAttachmentUrl, expectedDispatchDate, confirmedDispatchDate } = req.body;
+
+  const sale = await c.sales.findOne({ id });
+  if (!sale) return fail(res, "PI record not found", 404);
+
+  const update: Partial<Sale> = {};
+  if (saleDate) update.saleDate = new Date(saleDate);
+  if (piAttachmentName !== undefined) update.piAttachmentName = String(piAttachmentName);
+  if (piAttachmentUrl !== undefined) update.piAttachmentUrl = String(piAttachmentUrl);
+  if (expectedDispatchDate) update.expectedDispatchDate = new Date(expectedDispatchDate);
+  if (confirmedDispatchDate) update.confirmedDispatchDate = new Date(confirmedDispatchDate);
+
+  if (!update.saleDate && !update.piAttachmentName && !update.expectedDispatchDate && !update.confirmedDispatchDate) {
+    return fail(res, "PI attachment or dispatch date is required");
+  }
+
+  await c.sales.updateOne({ id }, { $set: update });
+  const updated = await c.sales.findOne({ id });
+  return ok(res, updated);
+});
+
+router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:manage"), async (req: Request, res: Response) => {
+  const c = await getCollections();
+  const { id } = req.params;
+  const {
+    serialNumber,
+    confirmedDispatchDate,
+    dispatchStatus,
+    courierDocketNo,
+    courierDocketAttachmentName,
+    courierDocketAttachmentUrl,
+    paymentStatus,
+  } = req.body;
+
+  const sale = await c.sales.findOne({ id });
+  if (!sale) return fail(res, "PI record not found", 404);
+
+  const update: Partial<Sale> = {};
+  if (serialNumber) {
+    const mfg = await c.manufactured.findOne({ serialNumber: String(serialNumber) });
+    if (!mfg) return fail(res, "Serial number not found in manufactured products");
+    if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo) return fail(res, "This product is already sold");
+    update.serialNumber = String(serialNumber);
+
+    await c.manufactured.updateOne(
+      { id: mfg.id },
+      {
+        $set: {
+          status: "Sold",
+          invoiceNo: sale.referenceNo,
+          customerId: sale.customerId,
+          soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
+          paymentStatus: paymentStatus === "Confirmed" ? "Verified" : "Pending",
+          updatedAt: new Date(),
+        },
+      }
+    );
+  }
+  if (confirmedDispatchDate) update.confirmedDispatchDate = new Date(confirmedDispatchDate);
+  if (dispatchStatus !== undefined) update.dispatchStatus = dispatchStatus;
+  if (courierDocketNo !== undefined) update.courierDocketNo = String(courierDocketNo);
+  if (courierDocketAttachmentName !== undefined) update.courierDocketAttachmentName = String(courierDocketAttachmentName);
+  if (courierDocketAttachmentUrl !== undefined) update.courierDocketAttachmentUrl = String(courierDocketAttachmentUrl);
+  if (paymentStatus !== undefined) update.paymentStatus = paymentStatus;
+
+  if (dispatchStatus === "Final Dispatch" && !update.confirmedDispatchDate && !sale.confirmedDispatchDate) {
+    return fail(res, "Confirm date of dispatch is required for final dispatch");
+  }
+  if (
+    dispatchStatus === "Final Dispatch" &&
+    !update.courierDocketNo &&
+    !update.courierDocketAttachmentName &&
+    !sale.courierDocketNo &&
+    !sale.courierDocketAttachmentName
+  ) {
+    return fail(res, "Courier docket no. or docket attachment is required for final dispatch");
+  }
+
+  if (Object.keys(update).length === 0) return fail(res, "No dispatch updates provided");
+
+  await c.sales.updateOne({ id }, { $set: update });
+  const updated = await c.sales.findOne({ id });
+  return ok(res, updated);
+});
+
 /**
  * POST /api/sales
  * Records a sales workflow entry. If serialNumber is supplied, also marks
@@ -231,6 +354,7 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
     registrationCode,
     materialName,
     quantity,
+    piItems,
     stateRegion,
     dealerRegistered,
     rjApprovalStatus,
@@ -254,7 +378,8 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
     return fail(res, "documentType, referenceNo, saleDate, customerId are required");
   }
 
-  const isWorkflowEntry = Boolean(materialName || quantity || stateRegion);
+  const parsedPiItems = parsePiItems(piItems);
+  const isWorkflowEntry = Boolean(materialName || quantity || parsedPiItems?.length || stateRegion);
   const isDispatchEntry = Boolean(
     piAttachmentName ||
       piAttachmentUrl ||
@@ -268,8 +393,8 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
   if (!isWorkflowEntry && !isDispatchEntry && !serialNumber) {
     return fail(res, "serialNumber or dispatch details are required");
   }
-  if (isWorkflowEntry && (!materialName || !quantity || !stateRegion)) {
-    return fail(res, "materialName, quantity and stateRegion are required");
+  if (isWorkflowEntry && (!(materialName || parsedPiItems?.length) || !(quantity || parsedPiItems?.length) || !stateRegion)) {
+    return fail(res, "PI item, quantity and stateRegion are required");
   }
 
   const customer = await c.customers.findOne({ id: customerId }, { projection: { id: 1 } });
@@ -315,8 +440,14 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
   };
   if (serialNumber) sale.serialNumber = String(serialNumber);
   if (registrationCode) sale.registrationCode = String(registrationCode);
-  if (materialName) sale.materialName = String(materialName);
-  if (quantity) sale.quantity = Number(quantity);
+  if (parsedPiItems?.length) {
+    sale.piItems = parsedPiItems;
+    sale.materialName = parsedPiItems[0].materialName;
+    sale.quantity = parsedPiItems.reduce((sum, item) => sum + item.quantity, 0);
+  } else {
+    if (materialName) sale.materialName = String(materialName);
+    if (quantity) sale.quantity = Number(quantity);
+  }
   if (stateRegion) sale.stateRegion = String(stateRegion);
   if (typeof dealerRegistered === "boolean") sale.dealerRegistered = dealerRegistered;
   if (rjApprovalStatus) sale.rjApprovalStatus = rjApprovalStatus;
@@ -362,6 +493,7 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
         customerId,
         materialName,
         quantity,
+        piItems: parsedPiItems,
         stateRegion,
         piAttachmentName,
         piAttachmentUrl,

@@ -53,6 +53,17 @@ exports.db = {
             updatedAt: new Date(),
         },
         {
+            id: "u-dispatch-demo",
+            email: "dispatch@avavbusiness.com",
+            passwordHash: bcryptjs_1.default.hashSync("Dispatch@123", 10),
+            name: "Dispatch Team",
+            mobile: "9380482094",
+            role: "Dispatch",
+            isActive: true,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+        },
+        {
             id: "u6",
             email: "service@avavbusiness.com",
             passwordHash: bcryptjs_1.default.hashSync("Service@123", 10),
@@ -64,7 +75,7 @@ exports.db = {
             updatedAt: new Date(),
         },
         {
-            id: "u5",
+            id: "u7",
             email: "h2solar08@gmail.com",
             passwordHash: bcryptjs_1.default.hashSync("H2Solar@123", 10),
             name: "H2 Solar",

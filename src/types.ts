@@ -1,4 +1,4 @@
-export type SystemRoleName = "Admin" | "Inventory" | "Sales" | "Service" | "Distributor";
+export type SystemRoleName = "Admin" | "Inventory" | "Sales" | "Dispatch" | "Service" | "Distributor";
 export type RoleName = string;
 /** Stored user role (may include legacy or custom role names). */
 export type UserRole = string;
@@ -14,6 +14,7 @@ export type Permission =
   | "inventory:raw-materials"
   | "inventory:manufactured"
   | "sales:entry"
+  | "dispatch:manage"
   | "complaints:consumer"
   | "complaints:supplier";
 
@@ -202,6 +203,13 @@ export type Sale = {
   registrationCode?: string;
   materialName?: string;
   quantity?: number;
+  piItems?: {
+    materialName: string;
+    hsnSac?: string;
+    quantity: number;
+    rate: number;
+    gstRate: number;
+  }[];
   stateRegion?: string;
   dealerRegistered?: boolean;
   rjApprovalStatus?: "Not Required" | "Pending" | "Approved";

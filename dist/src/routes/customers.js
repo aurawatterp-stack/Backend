@@ -56,7 +56,7 @@ function normalizeCustomerDocuments(documentsUploaded) {
     return docs.length ? docs : undefined;
 }
 /** GET /api/customers — paginated, filterable by name/type */
-router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", type, page = "1", limit = "20" } = req.query;
     const filter = {};

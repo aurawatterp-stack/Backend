@@ -80,7 +80,7 @@ router.post("/register", async (req: Request, res: Response) => {
   const c = await getCollections();
   const normalizedEmail = email.trim().toLowerCase();
   const normalizedRole = normalizeRole(role);
-  const allowedRoles: RoleName[] = ["Admin", "Inventory", "Sales", "Service"];
+  const allowedRoles: RoleName[] = ["Admin", "Inventory", "Sales", "Dispatch", "Service"];
   if (!allowedRoles.includes(normalizedRole)) {
     return fail(res, "Invalid role");
   }
