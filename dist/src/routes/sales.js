@@ -36,6 +36,35 @@ function parsePiItems(value) {
     }
     return parsed;
 }
+function piYearFromDate(value) {
+    const parsed = value ? new Date(String(value)) : new Date();
+    return Number.isFinite(parsed.getTime()) ? parsed.getFullYear() : new Date().getFullYear();
+}
+function isPlaceholderPiNumber(value) {
+    return /^PI-\d{4}-X+$/i.test(value);
+}
+async function nextPiNumber(c, year = new Date().getFullYear()) {
+    const rows = await c.sales
+        .find({ referenceNo: { $regex: `^PI-${year}-\\d+$`, $options: "i" } }, { projection: { referenceNo: 1 } })
+        .toArray();
+    const maxNumber = rows.reduce((max, row) => {
+        const match = String(row.referenceNo ?? "").match(new RegExp(`^PI-${year}-(\\d+)$`, "i"));
+        return match ? Math.max(max, Number(match[1]) || 0) : max;
+    }, 0);
+    return `PI-${year}-${String(maxNumber + 1).padStart(4, "0")}`;
+}
+async function resolveUniquePiNumber(c, value, saleDate, excludeSaleId) {
+    const year = piYearFromDate(saleDate);
+    let referenceNo = String(value ?? "").trim();
+    if (!referenceNo || isPlaceholderPiNumber(referenceNo)) {
+        referenceNo = await nextPiNumber(c, year);
+    }
+    const duplicate = await c.sales.findOne({ referenceNo, ...(excludeSaleId ? { id: { $ne: excludeSaleId } } : {}) }, { projection: { id: 1 } });
+    if (duplicate) {
+        throw new Error("This PI number already exists. Please generate a new PI number.");
+    }
+    return referenceNo;
+}
 function runDispatchDocketUpload(req, res, next) {
     dispatchDocketUpload.single("docket")(req, res, (err) => {
         if (!err)
@@ -57,7 +86,7 @@ function runPiUpload(req, res, next) {
     });
 }
 /** GET /api/sales */
-router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry", "dispatch:manage"), async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry", "dispatch:manage", "accounts:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { page = "1", limit = "20" } = req.query;
     const p = Math.max(1, parseInt(page));
@@ -71,10 +100,16 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:ent
         .toArray();
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
+router.get("/next-pi-number", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
+    const c = await (0, collections_1.getCollections)();
+    const yearParam = Number(req.query.year);
+    const year = Number.isInteger(yearParam) && yearParam >= 2000 && yearParam <= 9999 ? yearParam : new Date().getFullYear();
+    return (0, http_1.ok)(res, { referenceNo: await nextPiNumber(c, year) });
+});
 router.put("/:id/force-pi", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { id } = req.params;
-    const { documentType, referenceNo, saleDate, customerId, registrationCode, materialName, quantity, piItems, stateRegion, dealerRegistered, priceCategory, availableQuantity, inventoryStatus, expectedDispatchDate, dispatchStatus, paymentStatus, } = req.body;
+    const { documentType, referenceNo, saleDate, customerId, unregisteredCustomerName, unregisteredCustomerAddress, unregisteredCustomerGst, shipToAddressKey, registrationCode, materialName, quantity, piItems, stateRegion, dealerRegistered, priceCategory, availableQuantity, inventoryStatus, expectedDispatchDate, dispatchStatus, paymentStatus, } = req.body;
     const sale = await c.sales.findOne({ id });
     if (!sale)
         return (0, http_1.fail)(res, "PI record not found", 404);
@@ -83,16 +118,30 @@ router.put("/:id/force-pi", auth_1.authenticate, (0, auth_1.authorize)("Admin"),
     const update = {};
     if (documentType !== undefined)
         update.documentType = String(documentType);
-    if (referenceNo !== undefined)
-        update.referenceNo = String(referenceNo);
     if (saleDate)
         update.saleDate = new Date(saleDate);
+    if (referenceNo !== undefined) {
+        try {
+            update.referenceNo = await resolveUniquePiNumber(c, referenceNo, saleDate ?? sale.saleDate, String(id));
+        }
+        catch (err) {
+            return (0, http_1.fail)(res, err instanceof Error ? err.message : "Invalid PI number");
+        }
+    }
     if (customerId !== undefined) {
         const customer = await c.customers.findOne({ id: String(customerId) }, { projection: { id: 1 } });
         if (!customer)
             return (0, http_1.fail)(res, "Customer not found", 404);
         update.customerId = String(customerId);
     }
+    if (unregisteredCustomerName !== undefined)
+        update.unregisteredCustomerName = String(unregisteredCustomerName);
+    if (unregisteredCustomerAddress !== undefined)
+        update.unregisteredCustomerAddress = String(unregisteredCustomerAddress);
+    if (unregisteredCustomerGst !== undefined)
+        update.unregisteredCustomerGst = String(unregisteredCustomerGst);
+    if (shipToAddressKey !== undefined)
+        update.shipToAddressKey = shipToAddressKey;
     if (registrationCode !== undefined)
         update.registrationCode = String(registrationCode);
     if (materialName !== undefined)
@@ -132,7 +181,7 @@ router.put("/:id/force-pi", auth_1.authenticate, (0, auth_1.authorize)("Admin"),
 router.post("/:id/approve-force-pi", auth_1.authenticate, (0, auth_1.authorize)("Admin"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { id } = req.params;
-    const { registrationCode, materialName, quantity, piItems, stateRegion, priceCategory, availableQuantity, inventoryStatus, expectedDispatchDate, dispatchStatus, paymentStatus, } = req.body;
+    const { documentType, referenceNo, saleDate, customerId, dealerRegistered, registrationCode, unregisteredCustomerName, unregisteredCustomerAddress, unregisteredCustomerGst, shipToAddressKey, materialName, quantity, piItems, stateRegion, priceCategory, availableQuantity, inventoryStatus, expectedDispatchDate, dispatchStatus, paymentStatus, } = req.body;
     const sale = await c.sales.findOne({ id });
     if (!sale)
         return (0, http_1.fail)(res, "PI record not found", 404);
@@ -145,8 +194,36 @@ router.post("/:id/approve-force-pi", auth_1.authenticate, (0, auth_1.authorize)(
         forcePiApprovedBy: user.userId,
         forcePiApprovedAt: new Date(),
     };
+    if (documentType !== undefined)
+        update.documentType = String(documentType);
+    if (saleDate)
+        update.saleDate = new Date(saleDate);
+    if (referenceNo !== undefined) {
+        try {
+            update.referenceNo = await resolveUniquePiNumber(c, referenceNo, saleDate ?? sale.saleDate, String(id));
+        }
+        catch (err) {
+            return (0, http_1.fail)(res, err instanceof Error ? err.message : "Invalid PI number");
+        }
+    }
+    if (customerId !== undefined) {
+        const customer = await c.customers.findOne({ id: String(customerId) }, { projection: { id: 1 } });
+        if (!customer)
+            return (0, http_1.fail)(res, "Customer not found", 404);
+        update.customerId = String(customerId);
+    }
+    if (typeof dealerRegistered === "boolean")
+        update.dealerRegistered = dealerRegistered;
     if (registrationCode !== undefined)
         update.registrationCode = String(registrationCode);
+    if (unregisteredCustomerName !== undefined)
+        update.unregisteredCustomerName = String(unregisteredCustomerName);
+    if (unregisteredCustomerAddress !== undefined)
+        update.unregisteredCustomerAddress = String(unregisteredCustomerAddress);
+    if (unregisteredCustomerGst !== undefined)
+        update.unregisteredCustomerGst = String(unregisteredCustomerGst);
+    if (shipToAddressKey !== undefined)
+        update.shipToAddressKey = shipToAddressKey;
     if (materialName !== undefined)
         update.materialName = String(materialName);
     if (quantity !== undefined && quantity !== null)
@@ -202,7 +279,7 @@ router.post("/upload-docket", auth_1.authenticate, (0, auth_1.requireAnyPermissi
     }
 });
 /** POST /api/sales/upload-pi — upload PI file to Cloudinary */
-router.post("/upload-pi", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), runPiUpload, async (req, res) => {
+router.post("/upload-pi", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry", "accounts:manage"), runPiUpload, async (req, res) => {
     const file = req.file;
     if (!file)
         return (0, http_1.fail)(res, "PI file is required");
@@ -225,10 +302,44 @@ router.post("/upload-pi", auth_1.authenticate, (0, auth_1.requireAnyPermission)(
         return (0, http_1.fail)(res, err instanceof Error ? err.message : "Failed to upload PI file", 502);
     }
 });
+router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission)("accounts:manage"), async (req, res) => {
+    const c = await (0, collections_1.getCollections)();
+    const { id } = req.params;
+    const { taxInvoiceAttachmentName, taxInvoiceAttachmentUrl, ewayBillAttachmentName, ewayBillAttachmentUrl, paymentStatus, } = req.body;
+    const sale = await c.sales.findOne({ id });
+    if (!sale)
+        return (0, http_1.fail)(res, "PI record not found", 404);
+    if (!sale.piAttachmentUrl)
+        return (0, http_1.fail)(res, "PI must be shared to Accounts before accounts documents can be uploaded");
+    const user = req.user;
+    const update = {};
+    if (taxInvoiceAttachmentName !== undefined)
+        update.taxInvoiceAttachmentName = String(taxInvoiceAttachmentName);
+    if (taxInvoiceAttachmentUrl !== undefined)
+        update.taxInvoiceAttachmentUrl = String(taxInvoiceAttachmentUrl);
+    if (ewayBillAttachmentName !== undefined)
+        update.ewayBillAttachmentName = String(ewayBillAttachmentName);
+    if (ewayBillAttachmentUrl !== undefined)
+        update.ewayBillAttachmentUrl = String(ewayBillAttachmentUrl);
+    if (paymentStatus !== undefined)
+        update.paymentStatus = paymentStatus === "Confirmed" ? "Confirmed" : "Pending";
+    if (paymentStatus === "Confirmed" &&
+        ((!update.taxInvoiceAttachmentName && !sale.taxInvoiceAttachmentName) ||
+            (!update.ewayBillAttachmentName && !sale.ewayBillAttachmentName))) {
+        return (0, http_1.fail)(res, "Tax Invoice and E-Way Bill upload required before payment can be marked done");
+    }
+    if (update.paymentStatus === "Confirmed") {
+        update.accountsSharedAt = new Date();
+        update.accountsSharedBy = user.userId;
+    }
+    await c.sales.updateOne({ id }, { $set: update });
+    const updated = await c.sales.findOne({ id });
+    return (0, http_1.ok)(res, updated);
+});
 router.put("/:id/sales-dispatch", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { id } = req.params;
-    const { saleDate, piAttachmentName, piAttachmentUrl, expectedDispatchDate, confirmedDispatchDate } = req.body;
+    const { saleDate, piAttachmentName, piAttachmentUrl, expectedDispatchDate, confirmedDispatchDate, dispatchStatus } = req.body;
     const sale = await c.sales.findOne({ id });
     if (!sale)
         return (0, http_1.fail)(res, "PI record not found", 404);
@@ -243,6 +354,8 @@ router.put("/:id/sales-dispatch", auth_1.authenticate, (0, auth_1.requireAnyPerm
         update.expectedDispatchDate = new Date(expectedDispatchDate);
     if (confirmedDispatchDate)
         update.confirmedDispatchDate = new Date(confirmedDispatchDate);
+    if (dispatchStatus !== undefined)
+        update.dispatchStatus = dispatchStatus;
     if (!update.saleDate && !update.piAttachmentName && !update.expectedDispatchDate && !update.confirmedDispatchDate) {
         return (0, http_1.fail)(res, "PI attachment or dispatch date is required");
     }
@@ -253,7 +366,7 @@ router.put("/:id/sales-dispatch", auth_1.authenticate, (0, auth_1.requireAnyPerm
 router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermission)("dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { id } = req.params;
-    const { serialNumber, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, paymentStatus, } = req.body;
+    const { serialNumber, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, } = req.body;
     const sale = await c.sales.findOne({ id });
     if (!sale)
         return (0, http_1.fail)(res, "PI record not found", 404);
@@ -271,7 +384,7 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
                 invoiceNo: sale.referenceNo,
                 customerId: sale.customerId,
                 soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
-                paymentStatus: paymentStatus === "Confirmed" ? "Verified" : "Pending",
+                paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
                 updatedAt: new Date(),
             },
         });
@@ -286,17 +399,22 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
         update.courierDocketAttachmentName = String(courierDocketAttachmentName);
     if (courierDocketAttachmentUrl !== undefined)
         update.courierDocketAttachmentUrl = String(courierDocketAttachmentUrl);
-    if (paymentStatus !== undefined)
-        update.paymentStatus = paymentStatus;
-    if (dispatchStatus === "Final Dispatch" && !update.confirmedDispatchDate && !sale.confirmedDispatchDate) {
-        return (0, http_1.fail)(res, "Confirm date of dispatch is required for final dispatch");
+    const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered";
+    if (isDeliveryStatus && sale.paymentStatus !== "Confirmed") {
+        return (0, http_1.fail)(res, "Payment must be confirmed by Accounts before delivery");
     }
-    if (dispatchStatus === "Final Dispatch" &&
+    if (isDeliveryStatus && (!sale.taxInvoiceAttachmentName || !sale.ewayBillAttachmentName)) {
+        return (0, http_1.fail)(res, "Tax Invoice and E-Way Bill are required before delivery");
+    }
+    if (isDeliveryStatus && !update.confirmedDispatchDate && !sale.confirmedDispatchDate) {
+        return (0, http_1.fail)(res, "Confirm date of dispatch is required for delivery");
+    }
+    if (isDeliveryStatus &&
         !update.courierDocketNo &&
         !update.courierDocketAttachmentName &&
         !sale.courierDocketNo &&
         !sale.courierDocketAttachmentName) {
-        return (0, http_1.fail)(res, "Courier docket no. or docket attachment is required for final dispatch");
+        return (0, http_1.fail)(res, "Courier docket no. or docket attachment is required for delivery");
     }
     if (Object.keys(update).length === 0)
         return (0, http_1.fail)(res, "No dispatch updates provided");
@@ -311,9 +429,13 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
  */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { serialNumber, documentType, referenceNo, saleDate, customerId, registrationCode, materialName, quantity, piItems, stateRegion, dealerRegistered, rjApprovalStatus, forcePiPermission, priceCategory, availableQuantity, inventoryStatus, forcePiApprovalStatus, piAttachmentName, piAttachmentUrl, expectedDispatchDate, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, paymentStatus, } = req.body;
-    if (!documentType || !referenceNo || !saleDate || !customerId) {
-        return (0, http_1.fail)(res, "documentType, referenceNo, saleDate, customerId are required");
+    const { serialNumber, documentType, referenceNo, saleDate, customerId, unregisteredCustomerName, unregisteredCustomerAddress, unregisteredCustomerGst, shipToAddressKey, registrationCode, materialName, quantity, piItems, stateRegion, dealerRegistered, rjApprovalStatus, forcePiPermission, priceCategory, availableQuantity, inventoryStatus, forcePiApprovalStatus, piAttachmentName, piAttachmentUrl, expectedDispatchDate, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, paymentStatus, } = req.body;
+    const isRegisteredCustomer = dealerRegistered !== false;
+    if (!documentType || !saleDate || (isRegisteredCustomer && !customerId)) {
+        return (0, http_1.fail)(res, "documentType, saleDate and registered customer are required");
+    }
+    if (!isRegisteredCustomer && (!unregisteredCustomerName || !unregisteredCustomerAddress || !stateRegion)) {
+        return (0, http_1.fail)(res, "Non-registered customer name, ship-to address and state/region are required");
     }
     const parsedPiItems = parsePiItems(piItems);
     const isWorkflowEntry = Boolean(materialName || quantity || parsedPiItems?.length || stateRegion);
@@ -331,15 +453,23 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
     if (isWorkflowEntry && (!(materialName || parsedPiItems?.length) || !(quantity || parsedPiItems?.length) || !stateRegion)) {
         return (0, http_1.fail)(res, "PI item, quantity and stateRegion are required");
     }
-    const customer = await c.customers.findOne({ id: customerId }, { projection: { id: 1 } });
-    if (!customer)
-        return (0, http_1.fail)(res, "Customer not found", 404);
+    if (isRegisteredCustomer) {
+        const customer = await c.customers.findOne({ id: customerId }, { projection: { id: 1 } });
+        if (!customer)
+            return (0, http_1.fail)(res, "Customer not found", 404);
+    }
     const user = req.user;
+    let finalReferenceNo = "";
+    try {
+        finalReferenceNo = await resolveUniquePiNumber(c, referenceNo, saleDate);
+    }
+    catch (err) {
+        return (0, http_1.fail)(res, err instanceof Error ? err.message : "Invalid PI number");
+    }
     const requestedForcePi = Boolean(forcePiPermission) ||
         forcePiApprovalStatus === "Pending" ||
         forcePiApprovalStatus === "Approved" ||
-        dealerRegistered === false ||
-        inventoryStatus === "Insufficient";
+        dealerRegistered === false;
     if (serialNumber) {
         const mfg = await c.manufactured.findOne({ serialNumber });
         if (!mfg)
@@ -350,7 +480,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
         await c.manufactured.updateOne({ id: mfg.id }, {
             $set: {
                 status: "Sold",
-                invoiceNo: referenceNo,
+                invoiceNo: finalReferenceNo,
                 customerId,
                 soldDate: new Date(saleDate),
                 paymentStatus: paymentStatus === "Confirmed" ? "Verified" : "Pending",
@@ -361,14 +491,22 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
     const sale = {
         id: (0, id_1.generateId)(),
         documentType,
-        referenceNo,
+        referenceNo: finalReferenceNo,
         saleDate: new Date(saleDate),
-        customerId,
+        customerId: customerId || undefined,
         createdBy: user.userId,
         createdAt: new Date(),
     };
     if (serialNumber)
         sale.serialNumber = String(serialNumber);
+    if (unregisteredCustomerName)
+        sale.unregisteredCustomerName = String(unregisteredCustomerName);
+    if (unregisteredCustomerAddress)
+        sale.unregisteredCustomerAddress = String(unregisteredCustomerAddress);
+    if (unregisteredCustomerGst)
+        sale.unregisteredCustomerGst = String(unregisteredCustomerGst);
+    if (shipToAddressKey)
+        sale.shipToAddressKey = shipToAddressKey;
     if (registrationCode)
         sale.registrationCode = String(registrationCode);
     if (parsedPiItems?.length) {
@@ -435,13 +573,14 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
             id: (0, id_1.generateId)(),
             type: "sale_recorded",
             title: isWorkflowEntry ? "New Sales Workflow PI" : isDispatchEntry ? "Dispatch Planning Updated" : "New Sale Recorded",
-            body: `${referenceNo} • ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
+            body: `${finalReferenceNo} • ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
             entityType: "sale",
             entityId: sale.id,
             meta: {
                 serialNumber,
-                referenceNo,
+                referenceNo: finalReferenceNo,
                 customerId,
+                shipToAddressKey,
                 materialName,
                 quantity,
                 piItems: parsedPiItems,

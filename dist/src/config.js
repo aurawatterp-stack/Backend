@@ -56,13 +56,13 @@ function parseDotEnv(contents) {
     }
     return out;
 }
-function loadEnvFileIfPresent(filePath) {
+function loadEnvFileIfPresent(filePath, options = {}) {
     try {
         if (!fs.existsSync(filePath))
             return;
         const parsed = parseDotEnv(fs.readFileSync(filePath, "utf8"));
         for (const [k, v] of Object.entries(parsed)) {
-            if (process.env[k] === undefined)
+            if (options.override || process.env[k] === undefined)
                 process.env[k] = v;
         }
     }
@@ -72,7 +72,11 @@ function loadEnvFileIfPresent(filePath) {
 }
 const backendRoot = path.resolve(__dirname, "..");
 loadEnvFileIfPresent(path.resolve(process.cwd(), ".env"));
-loadEnvFileIfPresent(path.resolve(backendRoot, ".env"));
+loadEnvFileIfPresent(path.resolve(backendRoot, ".env"), { override: true });
+function cleanSecretEnv(name) {
+    const raw = process.env[name] ?? "";
+    return raw.trim().replace(/^["']|["']$/g, "");
+}
 function str(name, fallback) {
     const value = process.env[name];
     if (value !== undefined && value !== "")
@@ -158,7 +162,7 @@ exports.CONFIG = {
     BCRYPT_ROUNDS: num("BCRYPT_ROUNDS", 10),
     CORS_ORIGIN: corsOriginsFromEnv(process.env.CORS_ORIGIN),
     UPLOAD_DIR: uploadDirAbs,
-    CLOUDINARY_CLOUD_NAME: process.env.CLOUDINARY_CLOUD_NAME?.trim() || "",
-    CLOUDINARY_API_KEY: process.env.CLOUDINARY_API_KEY?.trim() || "",
-    CLOUDINARY_API_SECRET: process.env.CLOUDINARY_API_SECRET?.trim() || "",
+    CLOUDINARY_CLOUD_NAME: cleanSecretEnv("CLOUDINARY_CLOUD_NAME"),
+    CLOUDINARY_API_KEY: cleanSecretEnv("CLOUDINARY_API_KEY"),
+    CLOUDINARY_API_SECRET: cleanSecretEnv("CLOUDINARY_API_SECRET"),
 };

@@ -42,7 +42,7 @@ router.post("/login", async (req: Request, res: Response) => {
     return fail(res, "Invalid credentials", 401);
   }
 
-  const role = normalizeRole(user.role);
+  const role = normalizedEmail === "accountsdept@avavbusiness.com" ? "Accounts" : normalizeRole(user.role);
   if (role !== user.role) {
     await c.users.updateOne({ id: user.id }, { $set: { role, updatedAt: new Date() } });
   }
@@ -80,7 +80,7 @@ router.post("/register", async (req: Request, res: Response) => {
   const c = await getCollections();
   const normalizedEmail = email.trim().toLowerCase();
   const normalizedRole = normalizeRole(role);
-  const allowedRoles: RoleName[] = ["Admin", "Inventory", "Sales", "Dispatch", "Service"];
+  const allowedRoles: RoleName[] = ["Admin", "Inventory", "Sales", "Dispatch", "Accounts", "Service"];
   if (!allowedRoles.includes(normalizedRole)) {
     return fail(res, "Invalid role");
   }
@@ -113,7 +113,7 @@ router.get("/me", authenticate, async (req: Request, res: Response) => {
   const c = await getCollections();
   const user = await c.users.findOne({ id: userId });
   if (!user) return fail(res, "User not found", 404);
-  const role = normalizeRole(user.role);
+  const role = user.email?.toLowerCase() === "accountsdept@avavbusiness.com" ? "Accounts" : normalizeRole(user.role);
   if (role !== user.role) {
     await c.users.updateOne({ id: user.id }, { $set: { role, updatedAt: new Date() } });
   }

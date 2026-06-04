@@ -1,49 +1,39 @@
 "use strict";
-var __createBinding = (this && this.__createBinding) || (Object.create ? (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    var desc = Object.getOwnPropertyDescriptor(m, k);
-    if (!desc || ("get" in desc ? !m.__esModule : desc.writable || desc.configurable)) {
-      desc = { enumerable: true, get: function() { return m[k]; } };
-    }
-    Object.defineProperty(o, k2, desc);
-}) : (function(o, m, k, k2) {
-    if (k2 === undefined) k2 = k;
-    o[k2] = m[k];
-}));
-var __setModuleDefault = (this && this.__setModuleDefault) || (Object.create ? (function(o, v) {
-    Object.defineProperty(o, "default", { enumerable: true, value: v });
-}) : function(o, v) {
-    o["default"] = v;
-});
-var __importStar = (this && this.__importStar) || (function () {
-    var ownKeys = function(o) {
-        ownKeys = Object.getOwnPropertyNames || function (o) {
-            var ar = [];
-            for (var k in o) if (Object.prototype.hasOwnProperty.call(o, k)) ar[ar.length] = k;
-            return ar;
-        };
-        return ownKeys(o);
-    };
-    return function (mod) {
-        if (mod && mod.__esModule) return mod;
-        var result = {};
-        if (mod != null) for (var k = ownKeys(mod), i = 0; i < k.length; i++) if (k[i] !== "default") __createBinding(result, mod, k[i]);
-        __setModuleDefault(result, mod);
-        return result;
-    };
-})();
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
-const fs = __importStar(require("fs"));
+const multer_1 = __importDefault(require("multer"));
 const collections_1 = require("../db/collections");
 const auth_1 = require("../middleware/auth");
-const upload_1 = require("../middleware/upload");
+const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
+const MAX_SERIAL_CSV_BYTES = 5 * 1024 * 1024;
+const serialCsvUpload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: MAX_SERIAL_CSV_BYTES },
+    fileFilter: (_req, file, cb) => {
+        if (file.mimetype === "text/csv" || file.originalname.toLowerCase().endsWith(".csv")) {
+            cb(null, true);
+        }
+        else {
+            cb(new Error("Only CSV files are allowed"));
+        }
+    },
+});
+function runSerialCsvUpload(req, res, next) {
+    serialCsvUpload.single("serials")(req, res, (err) => {
+        if (!err)
+            return next();
+        if (err instanceof multer_1.default.MulterError && err.code === "LIMIT_FILE_SIZE") {
+            return (0, http_1.fail)(res, "CSV file size must be 5 MB or less", 413);
+        }
+        return (0, http_1.fail)(res, err instanceof Error ? err.message : "CSV upload failed", 400);
+    });
+}
 /** GET /api/serials — filter by series, status */
 router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:serials"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
@@ -66,15 +56,23 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory
  * Multipart form: field "serials" = CSV file, field "productSeriesId" = series id
  * CSV format: one serial per line (first column used)
  */
-router.post("/import", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:serials"), upload_1.upload.single("serials"), async (req, res) => {
+router.post("/import", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:serials"), runSerialCsvUpload, async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     if (!req.file)
         return (0, http_1.fail)(res, "CSV file is required");
     const { productSeriesId } = req.body;
     if (!productSeriesId)
         return (0, http_1.fail)(res, "productSeriesId is required");
-    const content = fs.readFileSync(req.file.path, "utf-8");
-    fs.unlinkSync(req.file.path);
+    let uploaded;
+    try {
+        uploaded = await (0, cloudinary_1.uploadBufferToCloudinary)(req.file, "aurawatt/serial-imports");
+    }
+    catch (err) {
+        return (0, http_1.fail)(res, err instanceof Error ? err.message : "Failed to upload CSV to Cloudinary", 502);
+    }
+    if (!uploaded.url)
+        return (0, http_1.fail)(res, "Cloudinary did not return a file URL", 502);
+    const content = req.file.buffer.toString("utf-8");
     const lines = content
         .split("\n")
         .map((l) => l.split(",")[0].trim())
@@ -94,10 +92,27 @@ router.post("/import", auth_1.authenticate, (0, auth_1.requireAnyPermission)("in
         serialNumber: serial,
         productSeriesId,
         status: "Available",
+        importFileName: req.file?.originalname,
+        importFileUrl: uploaded.url,
+        importFilePublicId: uploaded.publicId,
         uploadedAt: new Date(),
     }));
     if (docs.length)
         await c.serials.insertMany(docs);
-    return (0, http_1.ok)(res, { imported: docs.length, duplicatesSkipped: duplicates.length, duplicates });
+    return (0, http_1.ok)(res, {
+        imported: docs.length,
+        duplicatesSkipped: duplicates.length,
+        duplicates,
+        file: {
+            fileName: req.file.originalname,
+            fileType: req.file.mimetype || undefined,
+            fileSize: req.file.size,
+            url: uploaded.url,
+            publicId: uploaded.publicId,
+            resourceType: uploaded.resourceType,
+            format: uploaded.format,
+            uploadedAt: new Date(),
+        },
+    });
 });
 exports.default = router;

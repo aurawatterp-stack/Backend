@@ -17,15 +17,17 @@ exports.ALL_PERMISSIONS = [
     "inventory:manufactured",
     "sales:entry",
     "dispatch:manage",
+    "accounts:manage",
     "complaints:consumer",
     "complaints:supplier",
 ];
-exports.SYSTEM_ROLES = ["Admin", "Inventory", "Sales", "Dispatch", "Service", "Distributor"];
+exports.SYSTEM_ROLES = ["Admin", "Inventory", "Sales", "Dispatch", "Accounts", "Service", "Distributor"];
 exports.DEFAULT_ROLE_PERMISSIONS = {
     Admin: exports.ALL_PERMISSIONS,
     Inventory: ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured"],
     Sales: ["dashboard:view", "sales:entry"],
     Dispatch: ["dashboard:view", "dispatch:manage"],
+    Accounts: ["dashboard:view", "accounts:manage"],
     Service: ["dashboard:view", "complaints:consumer", "complaints:supplier"],
     Distributor: ["dashboard:view"],
 };
@@ -34,6 +36,7 @@ exports.ROLE_ALIASES = {
     Inventory: ["Inventory", "Inventory Manager"],
     Sales: ["Sales", "Sales Manager"],
     Dispatch: ["Dispatch", "Dispatch Team"],
+    Accounts: ["Accounts", "Accounts Team", "Accounts Manager"],
     Service: ["Service"],
     Distributor: ["Distributor"],
 };
@@ -57,6 +60,8 @@ function normalizeRole(input) {
         return "Sales";
     if (key === "dispatch" || key === "dispatch team")
         return "Dispatch";
+    if (key === "accounts" || key === "accounts team" || key === "accounts manager")
+        return "Accounts";
     if (key === "service" || key === "service manager")
         return "Service";
     if (key === "distributor")

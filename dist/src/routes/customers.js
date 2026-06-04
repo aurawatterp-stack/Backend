@@ -55,8 +55,15 @@ function normalizeCustomerDocuments(documentsUploaded) {
     });
     return docs.length ? docs : undefined;
 }
+function stripUndefined(value) {
+    for (const key of Object.keys(value)) {
+        if (value[key] === undefined)
+            delete value[key];
+    }
+    return value;
+}
 /** GET /api/customers — paginated, filterable by name/type */
-router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry", "dispatch:manage"), async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry", "dispatch:manage", "accounts:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", type, page = "1", limit = "20" } = req.query;
     const filter = {};
@@ -111,7 +118,7 @@ router.post("/upload-document", auth_1.authenticate, (0, auth_1.requireAnyPermis
 router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const user = req.user;
-    const { name, type, email, phone, address, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
+    const { name, type, email, phone, address, stateRegion, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
     const normalizedEmail = String(email ?? "").trim().toLowerCase();
     const normalizedType = type === "Individual" ? "Individual" : "Distributor";
     const normalizedPhone = String(phone ?? "").trim();
@@ -137,13 +144,14 @@ router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyP
         if (existingPending)
             return (0, http_1.fail)(res, "A distributor registration request is already pending for these details");
     }
-    const pending = {
+    const pending = stripUndefined({
         id: (0, id_1.generateId)(),
         name: String(name).trim(),
         type: normalizedType,
         email: normalizedEmail || undefined,
         phone: normalizedPhone,
         address: address ? String(address).trim() : undefined,
+        stateRegion: stateRegion ? String(stateRegion).trim() : undefined,
         registrationCode: registrationCode ? String(registrationCode).trim() : undefined,
         dateOfRegistration: dateOfRegistration ? new Date(dateOfRegistration) : undefined,
         gst: normalizedGst || undefined,
@@ -162,7 +170,7 @@ router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyP
         status: "Pending",
         requestedBy: user.userId,
         submittedAt: new Date(),
-    };
+    });
     await c.pendingCustomerRegistrations.insertOne(pending);
     try {
         const notification = {
@@ -177,6 +185,7 @@ router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyP
                 type: pending.type,
                 email: pending.email,
                 phone: pending.phone,
+                stateRegion: pending.stateRegion,
                 gst: pending.gst,
                 pan: pending.pan,
                 distributorshipType: pending.distributorshipType,
@@ -217,13 +226,14 @@ router.post("/approve/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission
         return (0, http_1.fail)(res, "This distributor is already registered");
     }
     const now = new Date();
-    const customer = {
+    const customer = stripUndefined({
         id: (0, id_1.generateId)(),
         name: pending.name,
         type: pending.type,
         email: pending.email,
         phone: pending.phone,
         address: pending.address || pending.billingAddress,
+        stateRegion: pending.stateRegion,
         dateOfRegistration: pending.dateOfRegistration,
         gst: pending.gst,
         cinNo: pending.cinNo,
@@ -241,7 +251,7 @@ router.post("/approve/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission
         status: "Active",
         createdAt: now,
         updatedAt: now,
-    };
+    });
     await c.customers.insertOne(customer);
     await c.pendingCustomerRegistrations.updateOne({ id: pending.id }, {
         $set: {

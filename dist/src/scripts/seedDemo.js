@@ -22,6 +22,36 @@ async function main() {
     else {
         console.log("No demo users to insert (already present).");
     }
+    const existingProducts = await c.products.find({}, { projection: { id: 1, model: 1 } }).toArray();
+    const existingProductModels = new Set(existingProducts.map((p) => String(p.model || "").toLowerCase()));
+    const productsToInsert = mockDb_1.db.products.filter((p) => !existingProductModels.has(p.model.toLowerCase()));
+    if (productsToInsert.length) {
+        await c.products.insertMany(productsToInsert);
+        console.log(`Inserted ${productsToInsert.length} demo products.`);
+    }
+    else {
+        console.log("No demo products to insert (already present).");
+    }
+    let productsUpdated = 0;
+    for (const product of mockDb_1.db.products) {
+        const hasPricing = product.hsnSac !== undefined ||
+            product.gstRate !== undefined ||
+            product.dealerPrice !== undefined ||
+            product.distributorPrice !== undefined;
+        if (!hasPricing)
+            continue;
+        const result = await c.products.updateOne({ model: product.model }, {
+            $set: {
+                hsnSac: product.hsnSac,
+                gstRate: product.gstRate,
+                dealerPrice: product.dealerPrice,
+                distributorPrice: product.distributorPrice,
+            },
+        });
+        if (result.modifiedCount)
+            productsUpdated += 1;
+    }
+    console.log(`Updated pricing for ${productsUpdated} demo products.`);
     const roles = await c.roles.find({}).sort({ name: 1 }).toArray();
     console.log(`Roles in DB: ${roles.map((r) => r.name).join(", ")}`);
 }

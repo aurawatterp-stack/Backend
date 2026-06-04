@@ -29,9 +29,12 @@ async function uploadBufferToCloudinary(file, folder) {
     });
     const payload = (await response.json().catch(() => null));
     if (!response.ok) {
-        const message = payload && typeof payload.error === "object" && payload.error && "message" in payload.error
+        const cloudinaryMessage = payload && typeof payload.error === "object" && payload.error && "message" in payload.error
             ? String(payload.error.message)
             : `Cloudinary upload failed (${response.status})`;
+        const message = cloudinaryMessage.toLowerCase().includes("invalid signature")
+            ? "Cloudinary credentials mismatch. Please verify CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET in backend/.env, then restart backend."
+            : cloudinaryMessage;
         throw new Error(message);
     }
     return {

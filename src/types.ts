@@ -1,4 +1,4 @@
-export type SystemRoleName = "Admin" | "Inventory" | "Sales" | "Dispatch" | "Service" | "Distributor";
+export type SystemRoleName = "Admin" | "Inventory" | "Sales" | "Dispatch" | "Accounts" | "Service" | "Distributor";
 export type RoleName = string;
 /** Stored user role (may include legacy or custom role names). */
 export type UserRole = string;
@@ -15,6 +15,7 @@ export type Permission =
   | "inventory:manufactured"
   | "sales:entry"
   | "dispatch:manage"
+  | "accounts:manage"
   | "complaints:consumer"
   | "complaints:supplier";
 
@@ -50,6 +51,7 @@ export type PendingCustomerRegistration = {
   email?: string;
   phone: string;
   address?: string;
+  stateRegion?: string;
   registrationCode?: string;
   dateOfRegistration?: Date;
   gst?: string;
@@ -116,6 +118,7 @@ export type Customer = {
   phone: string;
   registrationCode?: string;
   address?: string;
+  stateRegion?: string;
   dateOfRegistration?: Date;
   gst?: string;
   cinNo?: string;
@@ -140,6 +143,10 @@ export type Product = {
   series: string;
   model: string;
   description?: string;
+  hsnSac?: string;
+  gstRate?: number;
+  dealerPrice?: number;
+  distributorPrice?: number;
   createdAt: Date;
 };
 
@@ -190,6 +197,9 @@ export type SerialEntry = {
   serialNumber: string;
   productSeriesId: string;
   status: SerialStatus;
+  importFileName?: string;
+  importFileUrl?: string;
+  importFilePublicId?: string;
   uploadedAt: Date;
 };
 
@@ -199,7 +209,11 @@ export type Sale = {
   documentType: string;
   referenceNo: string;
   saleDate: Date;
-  customerId: string;
+  customerId?: string;
+  unregisteredCustomerName?: string;
+  unregisteredCustomerAddress?: string;
+  unregisteredCustomerGst?: string;
+  shipToAddressKey?: "address" | "billingAddress" | "deliveryAddress1" | "deliveryAddress2" | "deliveryAddress3";
   registrationCode?: string;
   materialName?: string;
   quantity?: number;
@@ -224,10 +238,16 @@ export type Sale = {
   piAttachmentUrl?: string;
   expectedDispatchDate?: Date;
   confirmedDispatchDate?: Date;
-  dispatchStatus?: "Planned" | "Ready" | "Final Dispatch";
+  dispatchStatus?: "Planned" | "Ready" | "Final Dispatch" | "Delivered";
   courierDocketNo?: string;
   courierDocketAttachmentName?: string;
   courierDocketAttachmentUrl?: string;
+  taxInvoiceAttachmentName?: string;
+  taxInvoiceAttachmentUrl?: string;
+  ewayBillAttachmentName?: string;
+  ewayBillAttachmentUrl?: string;
+  accountsSharedAt?: Date;
+  accountsSharedBy?: string;
   paymentStatus?: "Pending" | "Confirmed";
   createdBy: string;
   createdAt: Date;

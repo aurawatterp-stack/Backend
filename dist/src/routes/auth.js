@@ -39,7 +39,7 @@ router.post("/login", async (req, res) => {
     if (!isValid) {
         return (0, http_1.fail)(res, "Invalid credentials", 401);
     }
-    const role = (0, rbac_1.normalizeRole)(user.role);
+    const role = normalizedEmail === "accountsdept@avavbusiness.com" ? "Accounts" : (0, rbac_1.normalizeRole)(user.role);
     if (role !== user.role) {
         await c.users.updateOne({ id: user.id }, { $set: { role, updatedAt: new Date() } });
     }
@@ -71,7 +71,7 @@ router.post("/register", async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedRole = (0, rbac_1.normalizeRole)(role);
-    const allowedRoles = ["Admin", "Inventory", "Sales", "Dispatch", "Service"];
+    const allowedRoles = ["Admin", "Inventory", "Sales", "Dispatch", "Accounts", "Service"];
     if (!allowedRoles.includes(normalizedRole)) {
         return (0, http_1.fail)(res, "Invalid role");
     }
@@ -102,7 +102,7 @@ router.get("/me", auth_1.authenticate, async (req, res) => {
     const user = await c.users.findOne({ id: userId });
     if (!user)
         return (0, http_1.fail)(res, "User not found", 404);
-    const role = (0, rbac_1.normalizeRole)(user.role);
+    const role = user.email?.toLowerCase() === "accountsdept@avavbusiness.com" ? "Accounts" : (0, rbac_1.normalizeRole)(user.role);
     if (role !== user.role) {
         await c.users.updateOne({ id: user.id }, { $set: { role, updatedAt: new Date() } });
     }

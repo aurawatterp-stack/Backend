@@ -19,6 +19,21 @@ async function ensureSparseUniqueIndex<T extends Document>(col: Collection<T>, f
   await col.createIndex(fields as any, { unique: true, sparse: true, background: true });
 }
 
+async function ensurePartialUniqueStringIndex<T extends Document>(col: Collection<T>, fields: Record<string, 1 | -1>) {
+  const targetName = Object.entries(fields).map(([key, value]) => `${key}_${value}`).join("_");
+  const indexes = await col.indexes();
+  const existing = indexes.find((index) => index.name === targetName);
+  if (existing && !existing.partialFilterExpression) {
+    await col.dropIndex(targetName);
+  }
+  const field = Object.keys(fields)[0];
+  await col.createIndex(fields as any, {
+    unique: true,
+    background: true,
+    partialFilterExpression: { [field]: { $type: "string" } },
+  });
+}
+
 async function ensureIndex<T extends Document>(col: Collection<T>, fields: Record<string, 1 | -1>) {
   await col.createIndex(fields as any, { background: true });
 }
@@ -37,7 +52,7 @@ export async function initDatabase() {
   await ensureUniqueIndex(c.pendingRegistrations, { id: 1 });
   await ensureUniqueIndex(c.pendingRegistrations, { email: 1 });
   await ensureUniqueIndex(c.pendingCustomerRegistrations, { id: 1 });
-  await ensureSparseUniqueIndex(c.pendingCustomerRegistrations, { email: 1 });
+  await ensurePartialUniqueStringIndex(c.pendingCustomerRegistrations, { email: 1 });
 
   for (const col of [
     c.customers,
