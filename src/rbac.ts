@@ -17,16 +17,34 @@ export const ALL_PERMISSIONS: Permission[] = [
   "complaints:supplier",
 ];
 
-export const SYSTEM_ROLES: SystemRoleName[] = ["Admin", "Inventory", "Sales", "Dispatch", "Accounts", "Service", "Distributor"];
+export const SYSTEM_ROLES: SystemRoleName[] = [
+  "Admin",
+  "Inventory",
+  "Sales",
+  "Dispatch",
+  "Accounts",
+  "Distributor",
+  "L1 Engineer",
+  "L2 Technical Team",
+  "L3 Advanced OEM Support",
+  "Warehouse Team",
+  "Accounts Team",
+  "Dealer",
+];
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
   Admin: ALL_PERMISSIONS,
   Inventory: ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured"],
-  Sales: ["dashboard:view", "sales:entry"],
+  Sales: ["dashboard:view", "sales:entry", "complaints:consumer"],
   Dispatch: ["dashboard:view", "dispatch:manage"],
   Accounts: ["dashboard:view", "accounts:manage"],
-  Service: ["dashboard:view", "complaints:consumer", "complaints:supplier"],
   Distributor: ["dashboard:view"],
+  "L1 Engineer": ["dashboard:view", "complaints:consumer", "complaints:supplier"],
+  "L2 Technical Team": ["dashboard:view", "complaints:consumer", "complaints:supplier", "inventory:products"],
+  "L3 Advanced OEM Support": ["dashboard:view", "complaints:consumer", "complaints:supplier"],
+  "Warehouse Team": ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured", "dispatch:manage"],
+  "Accounts Team": ["dashboard:view", "accounts:manage", "complaints:consumer", "complaints:supplier"],
+  Dealer: ["dashboard:view", "complaints:consumer"],
 };
 
 export const ROLE_ALIASES: Record<SystemRoleName, UserRole[]> = {
@@ -35,8 +53,13 @@ export const ROLE_ALIASES: Record<SystemRoleName, UserRole[]> = {
   Sales: ["Sales", "Sales Manager"],
   Dispatch: ["Dispatch", "Dispatch Team"],
   Accounts: ["Accounts", "Accounts Team", "Accounts Manager"],
-  Service: ["Service"],
   Distributor: ["Distributor"],
+  "L1 Engineer": ["L1 Engineer", "Service", "Service Manager", "Support L1"],
+  "L2 Technical Team": ["L2 Technical Team", "Support L2", "Technical Team"],
+  "L3 Advanced OEM Support": ["L3 Advanced OEM Support", "Support L3", "OEM Support"],
+  "Warehouse Team": ["Warehouse Team", "Warehouse", "Inventory Team"],
+  "Accounts Team": ["Accounts Team", "Service Accounts"],
+  Dealer: ["Dealer"],
 };
 
 function collapseSpaces(s: string) {
@@ -58,9 +81,15 @@ export function normalizeRole(input: unknown): RoleName {
   if (key === "inventory" || key === "inventory manager") return "Inventory";
   if (key === "sales" || key === "sales manager") return "Sales";
   if (key === "dispatch" || key === "dispatch team") return "Dispatch";
-  if (key === "accounts" || key === "accounts team" || key === "accounts manager") return "Accounts";
-  if (key === "service" || key === "service manager") return "Service";
+  if (key === "accounts" || key === "accounts manager") return "Accounts";
+  if (key === "accounts team") return "Accounts Team";
   if (key === "distributor") return "Distributor";
+  if (key === "service" || key === "service manager" || key === "l1" || key === "l1 engineer" || key === "support l1") return "L1 Engineer";
+  if (key === "l2" || key === "l2 technical team" || key === "support l2" || key === "technical team") return "L2 Technical Team";
+  if (key === "l3" || key === "l3 advanced oem support" || key === "support l3" || key === "oem support") return "L3 Advanced OEM Support";
+  if (key === "warehouse" || key === "warehouse team") return "Warehouse Team";
+  if (key === "service accounts") return "Accounts Team";
+  if (key === "dealer") return "Dealer";
 
   // Custom role name: normalize spacing + title-case for consistency.
   const cleaned = raw.replace(/[^\w\s-]/g, "");

@@ -8,6 +8,29 @@ import { generateId } from "../utils/id";
 
 const router: Router = express.Router();
 
+function normalizeBomUsage(input: unknown): NonNullable<ManufacturedProduct["bomUsage"]> {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((item) => ({
+      rawMaterialId: item.rawMaterialId ? String(item.rawMaterialId) : undefined,
+      materialName: String(item.materialName ?? ""),
+      batch: item.batch ? String(item.batch) : undefined,
+      invoiceNo: item.invoiceNo ? String(item.invoiceNo) : undefined,
+      vendorName: item.vendorName ? String(item.vendorName) : undefined,
+      quantityUsed: Number(item.quantityUsed) || 0,
+    }))
+    .filter((item) => item.rawMaterialId && item.materialName && item.quantityUsed > 0);
+}
+
+function usageByRawMaterial(usage: ManufacturedProduct["bomUsage"] | undefined) {
+  const map = new Map<string, number>();
+  for (const item of usage ?? []) {
+    if (!item.rawMaterialId) continue;
+    map.set(item.rawMaterialId, (map.get(item.rawMaterialId) ?? 0) + (Number(item.quantityUsed) || 0));
+  }
+  return map;
+}
+
 /** GET /api/manufactured — filter by status, model, dateFrom, dateTo, customer */
 router.get(
   "/",
@@ -57,21 +80,58 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
     status: normalizedStatus,
     invoiceNo: invoiceNo ? String(invoiceNo) : undefined,
     paymentStatus: normalizedPayment,
-    bomUsage: Array.isArray(bomUsage)
-      ? bomUsage.map((item) => ({
-          rawMaterialId: item.rawMaterialId ? String(item.rawMaterialId) : undefined,
-          materialName: String(item.materialName ?? ""),
-          batch: item.batch ? String(item.batch) : undefined,
-          invoiceNo: item.invoiceNo ? String(item.invoiceNo) : undefined,
-          vendorName: item.vendorName ? String(item.vendorName) : undefined,
-          quantityUsed: Number(item.quantityUsed) || 0,
-        })).filter((item) => item.materialName && item.quantityUsed > 0)
-      : undefined,
+    bomUsage: normalizeBomUsage(bomUsage),
     createdAt: new Date(),
     updatedAt: new Date(),
   };
   await c.manufactured.insertOne(entry);
   return ok(res, entry, 201);
+});
+
+/** PUT /api/manufactured/:id/bom — modify BOM and adjust raw material stock by delta only */
+router.put("/:id/bom", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+  const c = await getCollections();
+  const id = req.params.id;
+  const existing = await c.manufactured.findOne({ id });
+  if (!existing) return fail(res, "Record not found", 404);
+
+  const nextBomUsage = normalizeBomUsage(req.body?.bomUsage);
+  const previousUsage = usageByRawMaterial(existing.bomUsage);
+  const nextUsage = usageByRawMaterial(nextBomUsage);
+  const rawMaterialIds = [...new Set([...previousUsage.keys(), ...nextUsage.keys()])];
+  const rawMaterials = await c.rawMaterials.find({ id: { $in: rawMaterialIds } }).toArray();
+  const rawById = new Map(rawMaterials.map((entry) => [entry.id, entry]));
+
+  for (const rawMaterialId of nextUsage.keys()) {
+    if (!rawById.has(rawMaterialId)) return fail(res, "Selected raw material entry not found", 404);
+  }
+
+  for (const rawMaterialId of rawMaterialIds) {
+    const entry = rawById.get(rawMaterialId);
+    if (!entry) continue;
+    const delta = (nextUsage.get(rawMaterialId) ?? 0) - (previousUsage.get(rawMaterialId) ?? 0);
+    if (delta > 0 && entry.quantityAvailable < delta) {
+      return fail(
+        res,
+        `${entry.materialName} stock insufficient. Available ${entry.quantityAvailable}, additional required ${delta}.`
+      );
+    }
+  }
+
+  for (const rawMaterialId of rawMaterialIds) {
+    const entry = rawById.get(rawMaterialId);
+    if (!entry) continue;
+    const delta = (nextUsage.get(rawMaterialId) ?? 0) - (previousUsage.get(rawMaterialId) ?? 0);
+    if (delta === 0) continue;
+    await c.rawMaterials.updateOne(
+      { id: rawMaterialId },
+      { $set: { quantityAvailable: entry.quantityAvailable - delta, updatedAt: new Date() } }
+    );
+  }
+
+  const updatedAt = new Date();
+  await c.manufactured.updateOne({ id }, { $set: { bomUsage: nextBomUsage, updatedAt } });
+  return ok(res, { ...existing, bomUsage: nextBomUsage, updatedAt });
 });
 
 /** PUT /api/manufactured/:id */

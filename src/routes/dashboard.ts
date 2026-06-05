@@ -19,7 +19,7 @@ router.get("/stats", authenticate, requireAnyPermission("dashboard:view"), async
   const inStock = await c.manufactured.countDocuments({ status: "In Stock" });
   const totalSold = await c.manufactured.countDocuments({ status: "Sold" });
 
-  const activeDistributors = await c.distributors.countDocuments({ isActive: true });
+  const activeDistributors = await c.customers.countDocuments({ type: "Distributor", status: "Active" });
   const totalCustomers = await c.customers.countDocuments({});
 
   const totalComplaints = await c.complaints.countDocuments({});

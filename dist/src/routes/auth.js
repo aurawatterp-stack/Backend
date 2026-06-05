@@ -6,6 +6,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
 const bcryptjs_1 = __importDefault(require("bcryptjs"));
 const collections_1 = require("../db/collections");
+const mockDb_1 = require("../db/mockDb");
 const auth_1 = require("../middleware/auth");
 const rbac_1 = require("../rbac");
 const http_1 = require("../utils/http");
@@ -17,7 +18,41 @@ async function permissionsForRole(role) {
         return [];
     const c = await (0, collections_1.getCollections)();
     const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
-    return (doc?.permissions ?? []);
+    return (doc?.permissions ?? rbac_1.DEFAULT_ROLE_PERMISSIONS[role] ?? []);
+}
+async function resolveLoginUser(email, password) {
+    const c = await (0, collections_1.getCollections)();
+    const user = await c.users.findOne({ email });
+    const demoUser = mockDb_1.db.users.find((item) => item.email.toLowerCase() === email);
+    if (!user) {
+        if (!demoUser)
+            return null;
+        const demoPasswordValid = await bcryptjs_1.default.compare(password, demoUser.passwordHash);
+        if (!demoPasswordValid)
+            return null;
+        const now = new Date();
+        const nextUser = { ...demoUser, email, role: (0, rbac_1.normalizeRole)(demoUser.role), isActive: true, updatedAt: now };
+        await c.users.insertOne(nextUser);
+        return nextUser;
+    }
+    if (!demoUser)
+        return user;
+    const validCurrent = await bcryptjs_1.default.compare(password, user.passwordHash);
+    if (validCurrent)
+        return user;
+    const validDemo = await bcryptjs_1.default.compare(password, demoUser.passwordHash);
+    if (!validDemo)
+        return user;
+    const update = {
+        passwordHash: demoUser.passwordHash,
+        name: user.name || demoUser.name,
+        mobile: user.mobile || demoUser.mobile,
+        role: (0, rbac_1.normalizeRole)(demoUser.role),
+        isActive: true,
+        updatedAt: new Date(),
+    };
+    await c.users.updateOne({ id: user.id }, { $set: update });
+    return { ...user, ...update };
 }
 /**
  * POST /api/auth/login
@@ -31,7 +66,7 @@ router.post("/login", async (req, res) => {
     }
     const c = await (0, collections_1.getCollections)();
     const normalizedEmail = email.trim().toLowerCase();
-    const user = await c.users.findOne({ email: normalizedEmail });
+    const user = await resolveLoginUser(normalizedEmail, password);
     if (!user || !user.isActive) {
         return (0, http_1.fail)(res, "Invalid credentials", 401);
     }
@@ -71,7 +106,20 @@ router.post("/register", async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const normalizedEmail = email.trim().toLowerCase();
     const normalizedRole = (0, rbac_1.normalizeRole)(role);
-    const allowedRoles = ["Admin", "Inventory", "Sales", "Dispatch", "Accounts", "Service"];
+    const allowedRoles = [
+        "Admin",
+        "Inventory",
+        "Sales",
+        "Dispatch",
+        "Accounts",
+        "Distributor",
+        "L1 Engineer",
+        "L2 Technical Team",
+        "L3 Advanced OEM Support",
+        "Warehouse Team",
+        "Accounts Team",
+        "Dealer",
+    ];
     if (!allowedRoles.includes(normalizedRole)) {
         return (0, http_1.fail)(res, "Invalid role");
     }

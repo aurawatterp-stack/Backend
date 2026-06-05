@@ -8,6 +8,14 @@ const collections_1 = require("../db/collections");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
+const MAX_ACTIVE_TICKETS_PER_ENGINEER = 5;
+const PORTAL_SERVICE_REGIONS = [
+    { name: "NCR", keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"], engineerId: "eng-ncr-l1", engineerName: "Rohit Sharma", backupEngineerName: "Amit Verma" },
+    { name: "UP", keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"], engineerId: "eng-up-l1", engineerName: "Vikas Yadav", backupEngineerName: "Sandeep Singh" },
+    { name: "Rajasthan", keywords: ["jaipur", "ajmer", "rajasthan", "udaipur", "jodhpur"], engineerId: "eng-rj-l1", engineerName: "Mahesh Choudhary", backupEngineerName: "Deepak Meena" },
+    { name: "Punjab", keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"], engineerId: "eng-pb-l1", engineerName: "Harpreet Singh", backupEngineerName: "Gurpreet Gill" },
+];
+const PORTAL_ACTIVE_STATUSES = ["Assigned to Engineer", "In Progress at Aurawatt", "Escalated to L2", "Escalated to L3", "Spare Requested", "Dispatch in Progress"];
 function normalizeSerial(value) {
     return String(value ?? "").trim();
 }
@@ -20,6 +28,56 @@ function phoneMatches(input, stored) {
     if (!cleanInput || !cleanStored)
         return true;
     return cleanInput === cleanStored || cleanInput.endsWith(cleanStored) || cleanStored.endsWith(cleanInput);
+}
+function derivePriority(issueDescription) {
+    const issue = issueDescription.toLowerCase();
+    if (/(fire|burn|smell|commercial plant down|plant down|smoke)/.test(issue))
+        return "Emergency";
+    if (/(shutdown|system down|not starting|dead|trip)/.test(issue))
+        return "High";
+    if (/(export|battery|charging|hardware|spare)/.test(issue))
+        return "Medium";
+    return "Low";
+}
+function mapPortalRegion(location) {
+    const text = String(location ?? "").trim().toLowerCase();
+    return PORTAL_SERVICE_REGIONS.find((region) => region.name.toLowerCase() === text || region.keywords.some((keyword) => text.includes(keyword))) ?? PORTAL_SERVICE_REGIONS[0];
+}
+async function assignPortalTicket(issueDescription, location) {
+    const c = await (0, collections_1.getCollections)();
+    const region = mapPortalRegion(location);
+    const priority = derivePriority(issueDescription);
+    const now = new Date();
+    const activeCount = await c.complaints.countDocuments({
+        assignedEngineerId: region.engineerId,
+        status: { $in: PORTAL_ACTIVE_STATUSES },
+    });
+    if (activeCount >= MAX_ACTIVE_TICKETS_PER_ENGINEER) {
+        const queuePosition = (await c.complaints.countDocuments({ region: region.name, assignmentStatus: "Waiting", status: "Waiting Lobby" })) + 1;
+        return {
+            region: region.name,
+            priority,
+            assignmentStatus: "Waiting",
+            backupEngineerName: region.backupEngineerName,
+            waitingSince: now,
+            slaPaused: true,
+            queuePosition,
+            status: "Waiting Lobby",
+        };
+    }
+    return {
+        region: region.name,
+        priority,
+        assignmentStatus: "Assigned",
+        assignedEngineerId: region.engineerId,
+        assignedEngineerName: region.engineerName,
+        backupEngineerName: region.backupEngineerName,
+        activeTicketCountAtAssignment: activeCount,
+        slaStartedAt: now,
+        slaDueAt: new Date(now.getTime() + (priority === "Emergency" ? 2 : 4) * 60 * 60 * 1000),
+        slaPaused: false,
+        status: "Assigned to Engineer",
+    };
 }
 async function findManufacturedBySerial(serialNumber) {
     const c = await (0, collections_1.getCollections)();
@@ -79,8 +137,9 @@ router.post("/complaints", async (req, res) => {
     if (!manufactured)
         return (0, http_1.fail)(res, "Serial number not found", 404);
     const linkedCustomer = manufactured.customerId
-        ? await c.customers.findOne({ id: manufactured.customerId }, { projection: { id: 1, name: 1, phone: 1, email: 1 } })
+        ? await c.customers.findOne({ id: manufactured.customerId }, { projection: { id: 1, name: 1, phone: 1, email: 1, address: 1 } })
         : null;
+    const siteLocation = String(req.body.siteLocation ?? linkedCustomer?.address ?? "").trim();
     if (linkedCustomer?.phone && mobile && !phoneMatches(mobile, linkedCustomer.phone)) {
         return (0, http_1.fail)(res, "Mobile number does not match this serial number", 401);
     }
@@ -88,6 +147,7 @@ router.post("/complaints", async (req, res) => {
         return (0, http_1.fail)(res, "Customer name and mobile number are required");
     }
     const now = new Date();
+    const assignment = await assignPortalTicket(issueDescription, siteLocation);
     const complaint = {
         id: (0, id_1.generateId)(),
         type: "Consumer",
@@ -101,13 +161,26 @@ router.post("/complaints", async (req, res) => {
         issueDescription,
         ticketSource: "Link",
         l1Sla: "4 Hours",
+        siteLocation: siteLocation || undefined,
+        region: assignment.region,
+        priority: assignment.priority,
+        assignmentStatus: assignment.assignmentStatus,
+        assignedEngineerId: assignment.assignedEngineerId,
+        assignedEngineerName: assignment.assignedEngineerName,
+        backupEngineerName: assignment.backupEngineerName,
+        activeTicketCountAtAssignment: assignment.activeTicketCountAtAssignment,
+        waitingSince: assignment.waitingSince,
+        slaStartedAt: assignment.slaStartedAt,
+        slaDueAt: assignment.slaDueAt,
+        slaPaused: assignment.slaPaused,
+        queuePosition: assignment.queuePosition,
         initialAction: "Customer portal intake. Service team to triage and assign engineer.",
         escalationLevel: "L1",
         spareRequired: false,
         spareInventoryStatus: "Not Required",
         siteVisitRequired: false,
         l3SupportRequired: false,
-        status: "Open at Aurawatt",
+        status: assignment.status,
         raisedBy: "customer-portal",
         createdAt: now,
         updatedAt: now,
@@ -128,7 +201,7 @@ router.post("/complaints", async (req, res) => {
                 customerEmail: complaint.customerEmail,
                 ticketSource: "Link",
             },
-            audienceRoles: ["Admin", "Service"],
+            audienceRoles: ["Admin", "L1 Engineer", "L2 Technical Team"],
             readBy: [],
             createdBy: "customer-portal",
             createdAt: now,

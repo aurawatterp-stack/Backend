@@ -1,4 +1,16 @@
-export type SystemRoleName = "Admin" | "Inventory" | "Sales" | "Dispatch" | "Accounts" | "Service" | "Distributor";
+export type SystemRoleName =
+  | "Admin"
+  | "Inventory"
+  | "Sales"
+  | "Dispatch"
+  | "Accounts"
+  | "Distributor"
+  | "L1 Engineer"
+  | "L2 Technical Team"
+  | "L3 Advanced OEM Support"
+  | "Warehouse Team"
+  | "Accounts Team"
+  | "Dealer";
 export type RoleName = string;
 /** Stored user role (may include legacy or custom role names). */
 export type UserRole = string;
@@ -256,10 +268,40 @@ export type Sale = {
 export type ComplaintType = "Consumer" | "Supplier" | string;
 export type ComplaintStatus =
   | "Open at Aurawatt"
+  | "Waiting Lobby"
+  | "Assigned to Engineer"
   | "In Progress at Aurawatt"
+  | "Escalated to L2"
+  | "Escalated to L3"
+  | "Spare Requested"
+  | "Dispatch in Progress"
   | "Resolved by Aurawatt"
   | "Pending with Suppliers"
-  | "Resolved by Suppliers";
+  | "Resolved by Suppliers"
+  | string;
+
+export type ServicePriority = "Low" | "Medium" | "High" | "Emergency";
+
+export type L1Inspection = {
+  inverterModel?: string;
+  serialNumber?: string;
+  errorCode?: string;
+  eTotalKwh?: number;
+  physicalChecks?: Record<string, boolean>;
+  acReadings?: Record<string, number | undefined>;
+  dcReadings?: Record<string, number | undefined>;
+  batteryReadings?: Record<string, number | boolean | undefined>;
+  systemStatus?: Record<string, boolean>;
+  errorFrequency?: "Once" | "Intermittent" | "Repeated" | "Continuous" | string;
+  repeatIssue?: boolean;
+  systemShutdown?: boolean;
+  faultType?: "Temporary" | "Permanent" | string;
+  observationNotes?: string;
+  remoteResolutionPossible?: boolean;
+  siteVisitRequiredSuspected?: boolean;
+  spareSuspected?: boolean;
+  escalateToL2?: boolean;
+};
 
 export type Complaint = {
   id: string;
@@ -277,13 +319,37 @@ export type Complaint = {
   issueDescription: string;
   ticketSource?: "Call" | "WhatsApp" | "Link" | "ERP";
   l1Sla?: "2 Hours" | "4 Hours";
+  dealerName?: string;
+  siteLocation?: string;
+  region?: string;
+  priority?: ServicePriority;
+  warrantyStatus?: "In Warranty" | "Out of Warranty" | "Unknown" | string;
+  productModel?: string;
+  assignmentStatus?: "Assigned" | "Waiting";
+  assignedEngineerId?: string;
+  assignedEngineerName?: string;
+  backupEngineerName?: string;
+  activeTicketCountAtAssignment?: number;
+  waitingSince?: Date;
+  slaStartedAt?: Date;
+  slaDueAt?: Date;
+  slaPaused?: boolean;
+  queuePosition?: number;
   initialAction?: string;
   trackingNotes?: string;
   escalationLevel?: "L1" | "L2" | "L3";
+  l1Inspection?: L1Inspection;
+  l1InspectionValid?: boolean;
   technicalDiagnosis?: string;
   spareRequired?: boolean;
   spareName?: string;
   spareInventoryStatus?: "Not Required" | "Available" | "Procurement Required";
+  spareRequestStatus?: "Not Required" | "Requested" | "Reserved" | "Dispatched" | "Procurement Triggered" | string;
+  dispatchTrackingNo?: string;
+  procurementStatus?: "Not Required" | "Vendor Triggered" | "Approval Pending" | "Processing" | "Received" | string;
+  chargeableApprovalStatus?: "Not Required" | "Pending" | "Approved" | "Rejected" | string;
+  paymentVerificationStatus?: "Pending" | "Verified" | string;
+  replacementApprovalStatus?: "Not Required" | "Pending Accounts" | "Approved" | "Rejected" | string;
   dispatchPlan?: string;
   siteVisitRequired?: boolean;
   engineerName?: string;
