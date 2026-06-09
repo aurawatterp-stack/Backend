@@ -18,7 +18,7 @@ router.get("/stats", auth_1.authenticate, (0, auth_1.requireAnyPermission)("dash
     const totalManufactured = await c.manufactured.countDocuments({});
     const inStock = await c.manufactured.countDocuments({ status: "In Stock" });
     const totalSold = await c.manufactured.countDocuments({ status: "Sold" });
-    const activeDistributors = await c.distributors.countDocuments({ isActive: true });
+    const activeDistributors = await c.customers.countDocuments({ type: "Distributor", status: "Active" });
     const totalCustomers = await c.customers.countDocuments({});
     const totalComplaints = await c.complaints.countDocuments({});
     const openComplaints = await c.complaints.countDocuments({ status: "Open at Aurawatt" });

@@ -1,13 +1,47 @@
-serial
-AW-SP4-26-0001
-AW-SP4-26-0002
-AW-SP4-26-0003
-AW-SP5-26-0001
-AW-SP5-26-0002
-AW-SP5-26-0003
-AW-SP10-26-0001
-AW-SP10-26-0002
-AW-LFP8504-26-0001
-AW-LFP8504-26-0002
-AW-LFP8507-26-0001
-AW-LFP8507-26-0002
+serial,productModel,customerName,dealerName,cityLocation,region,dateOfSale,customerPhone,customerEmail,customerAddress
+AW-SP4-26-0001,AW-SP-4KW/48V Inverter,Priyansh,Ramesh Solar Traders,Lucknow Uttar Pradesh,UP,2026-06-01,9000000001,priyansh.demo@aurawatt.in,Lucknow Uttar Pradesh 226010
+AW-SP4-26-0002,AW-SP-4KW/48V Inverter,Amit Kumar,Ramesh Solar Traders,Kanpur Uttar Pradesh,UP,2026-06-02,9000000002,amit.demo@aurawatt.in,Kanpur Uttar Pradesh 208001
+AW-SP4-26-0003,AW-SP-4KW/48V Inverter,Neha Singh,Sunrise Power Solutions,Noida Uttar Pradesh,NCR,2026-06-03,9000000003,neha.demo@aurawatt.in,Noida Sector 62 Uttar Pradesh
+AW-SP4-26-0004,AW-SP-4KW/48V Inverter,Rahul Verma,Green Grid Solar,Jaipur Rajasthan,Rajasthan,2026-06-04,9000000004,rahul.demo@aurawatt.in,Jaipur Rajasthan 302001
+AW-SP4-26-0005,AW-SP-4KW/48V Inverter,Pooja Sharma,Harpreet Energy,Ludhiana Punjab,Punjab,2026-06-05,9000000005,pooja.demo@aurawatt.in,Ludhiana Punjab 141001
+AW-SP4-26-0006,AW-SP-4KW/48V Inverter,Vikas Yadav,UP Solar Mart,Varanasi Uttar Pradesh,UP,2026-06-06,9000000006,vikas.demo@aurawatt.in,Varanasi Uttar Pradesh 221001
+AW-SP4-26-0007,AW-SP-4KW/48V Inverter,Simran Kaur,North Star Solar,Amritsar Punjab,Punjab,2026-06-07,9000000007,simran.demo@aurawatt.in,Amritsar Punjab 143001
+AW-SP4-26-0008,AW-SP-4KW/48V Inverter,Deepak Meena,Rajasthan Solar Hub,Udaipur Rajasthan,Rajasthan,2026-06-08,9000000008,deepak.demo@aurawatt.in,Udaipur Rajasthan 313001
+AW-SP5-26-0001,AW-SP-5KW/48V Inverter,Manish Gupta,Ramesh Solar Traders,Lucknow Uttar Pradesh,UP,2026-06-01,9000000011,manish.demo@aurawatt.in,Lucknow Uttar Pradesh 226016
+AW-SP5-26-0002,AW-SP-5KW/48V Inverter,Sonal Jain,Green Grid Solar,Ajmer Rajasthan,Rajasthan,2026-06-02,9000000012,sonal.demo@aurawatt.in,Ajmer Rajasthan 305001
+AW-SP5-26-0003,AW-SP-5KW/48V Inverter,Karan Malhotra,North Star Solar,Jalandhar Punjab,Punjab,2026-06-03,9000000013,karan.demo@aurawatt.in,Jalandhar Punjab 144001
+AW-SP5-26-0004,AW-SP-5KW/48V Inverter,Ritu Agarwal,Sunrise Power Solutions,Gurugram Haryana,NCR,2026-06-04,9000000014,ritu.demo@aurawatt.in,Gurugram Haryana 122001
+AW-SP5-26-0005,AW-SP-5KW/48V Inverter,Arjun Mishra,UP Solar Mart,Prayagraj Uttar Pradesh,UP,2026-06-05,9000000015,arjun.demo@aurawatt.in,Prayagraj Uttar Pradesh 211001
+AW-SP5-26-0006,AW-SP-5KW/48V Inverter,Kavita Rao,Rajasthan Solar Hub,Jodhpur Rajasthan,Rajasthan,2026-06-06,9000000016,kavita.demo@aurawatt.in,Jodhpur Rajasthan 342001
+AW-SP5-26-0007,AW-SP-5KW/48V Inverter,Harsh Rana,DVH Solar Green Energy,Saharanpur Uttar Pradesh,UP,2026-06-07,9000000017,harsh.demo@aurawatt.in,Saharanpur Uttar Pradesh 247001
+AW-SP5-26-0008,AW-SP-5KW/48V Inverter,Anjali Batra,Harpreet Energy,Patiala Punjab,Punjab,2026-06-08,9000000018,anjali.demo@aurawatt.in,Patiala Punjab 147001
+AW-SP5-26-0009,AW-SP-5KW/48V Inverter,Faizan Ali,Sunrise Power Solutions,Delhi NCR,NCR,2026-06-09,9000000019,faizan.demo@aurawatt.in,Delhi NCR 110001
+AW-SP5-26-0010,AW-SP-5KW/48V Inverter,Meera Joshi,UP Solar Mart,Kanpur Uttar Pradesh,UP,2026-06-10,9000000020,meera.demo@aurawatt.in,Kanpur Uttar Pradesh 208012
+AW-SP5-26-0011,AW-SP-5KW/48V Inverter,Om Prakash,Green Grid Solar,Jaipur Rajasthan,Rajasthan,2026-06-11,9000000021,om.demo@aurawatt.in,Jaipur Rajasthan 302012
+AW-SP5-26-0012,AW-SP-5KW/48V Inverter,Nitin Saini,North Star Solar,Ludhiana Punjab,Punjab,2026-06-12,9000000022,nitin.demo@aurawatt.in,Ludhiana Punjab 141008
+AW-SP5-26-0013,AW-SP-5KW/48V Inverter,Sakshi Tomar,Ramesh Solar Traders,Noida Uttar Pradesh,NCR,2026-06-13,9000000023,sakshi.demo@aurawatt.in,Noida Uttar Pradesh 201301
+AW-SP5-26-0014,AW-SP-5KW/48V Inverter,Gaurav Saxena,UP Solar Mart,Lucknow Uttar Pradesh,UP,2026-06-14,9000000024,gaurav.demo@aurawatt.in,Lucknow Uttar Pradesh 226022
+AW-SP5-26-0015,AW-SP-5KW/48V Inverter,Isha Kapoor,Harpreet Energy,Amritsar Punjab,Punjab,2026-06-15,9000000025,isha.demo@aurawatt.in,Amritsar Punjab 143006
+AW-SP10-26-0001,AW-SP-10KW/48V Inverter,Rajesh Tiwari,H2 Solar Power,Lucknow Uttar Pradesh,UP,2026-06-01,9000000031,rajesh.demo@aurawatt.in,Lucknow Uttar Pradesh 226201
+AW-SP10-26-0002,AW-SP-10KW/48V Inverter,Tanya Sethi,Sunrise Power Solutions,Ghaziabad Uttar Pradesh,NCR,2026-06-02,9000000032,tanya.demo@aurawatt.in,Ghaziabad Uttar Pradesh 201001
+AW-SP10-26-0003,AW-SP-10KW/48V Inverter,Mahesh Choudhary,Green Grid Solar,Jaipur Rajasthan,Rajasthan,2026-06-03,9000000033,mahesh.demo@aurawatt.in,Jaipur Rajasthan 302020
+AW-SP10-26-0004,AW-SP-10KW/48V Inverter,Gurpreet Gill,North Star Solar,Ludhiana Punjab,Punjab,2026-06-04,9000000034,gurpreet.demo@aurawatt.in,Ludhiana Punjab 141010
+AW-SP10-26-0005,AW-SP-10KW/48V Inverter,Ayesha Khan,UP Solar Mart,Varanasi Uttar Pradesh,UP,2026-06-05,9000000035,ayesha.demo@aurawatt.in,Varanasi Uttar Pradesh 221010
+AW-SP10-26-0006,AW-SP-10KW/48V Inverter,Sandeep Singh,DVH Solar Green Energy,Saharanpur Uttar Pradesh,UP,2026-06-06,9000000036,sandeep.demo@aurawatt.in,Saharanpur Uttar Pradesh 247002
+AW-LFP8504-26-0001,51.2V/100AH,Rohit Sharma,Ramesh Solar Traders,Lucknow Uttar Pradesh,UP,2026-06-01,9000000041,rohit.demo@aurawatt.in,Lucknow Uttar Pradesh 226010
+AW-LFP8504-26-0002,51.2V/100AH,Amit Verma,UP Solar Mart,Kanpur Uttar Pradesh,UP,2026-06-02,9000000042,amitv.demo@aurawatt.in,Kanpur Uttar Pradesh 208011
+AW-LFP8504-26-0003,51.2V/100AH,Ankit Bansal,Sunrise Power Solutions,Faridabad Haryana,NCR,2026-06-03,9000000043,ankit.demo@aurawatt.in,Faridabad Haryana 121001
+AW-LFP8504-26-0004,51.2V/100AH,Preeti Mehra,Green Grid Solar,Ajmer Rajasthan,Rajasthan,2026-06-04,9000000044,preeti.demo@aurawatt.in,Ajmer Rajasthan 305002
+AW-LFP8504-26-0005,51.2V/100AH,Jaspreet Kaur,Harpreet Energy,Patiala Punjab,Punjab,2026-06-05,9000000045,jaspreet.demo@aurawatt.in,Patiala Punjab 147002
+AW-LFP8504-26-0006,51.2V/100AH,Anand Tripathi,H2 Solar Power,Lucknow Uttar Pradesh,UP,2026-06-06,9000000046,anand.demo@aurawatt.in,Lucknow Uttar Pradesh 226201
+AW-LFP8504-26-0007,51.2V/100AH,Seema Chauhan,Rajasthan Solar Hub,Udaipur Rajasthan,Rajasthan,2026-06-07,9000000047,seema.demo@aurawatt.in,Udaipur Rajasthan 313002
+AW-LFP8504-26-0008,51.2V/100AH,Pranav Arora,North Star Solar,Jalandhar Punjab,Punjab,2026-06-08,9000000048,pranav.demo@aurawatt.in,Jalandhar Punjab 144002
+AW-LFP8504-26-0009,51.2V/100AH,Rekha Devi,UP Solar Mart,Prayagraj Uttar Pradesh,UP,2026-06-09,9000000049,rekha.demo@aurawatt.in,Prayagraj Uttar Pradesh 211002
+AW-LFP8504-26-0010,51.2V/100AH,Naveen Bhatia,Sunrise Power Solutions,Delhi NCR,NCR,2026-06-10,9000000050,naveen.demo@aurawatt.in,Delhi NCR 110002
+AW-LFP8507-26-0001,51.2V/100AH - HSN 8507,Kuldeep Singh,Harpreet Energy,Amritsar Punjab,Punjab,2026-06-01,9000000051,kuldeep.demo@aurawatt.in,Amritsar Punjab 143002
+AW-LFP8507-26-0002,51.2V/100AH - HSN 8507,Divya Jain,Green Grid Solar,Jodhpur Rajasthan,Rajasthan,2026-06-02,9000000052,divya.demo@aurawatt.in,Jodhpur Rajasthan 342002
+AW-LFP8507-26-0003,51.2V/100AH - HSN 8507,Mohit Suri,Sunrise Power Solutions,Noida Uttar Pradesh,NCR,2026-06-03,9000000053,mohit.demo@aurawatt.in,Noida Uttar Pradesh 201309
+AW-LFP8507-26-0004,51.2V/100AH - HSN 8507,Charu Gupta,Ramesh Solar Traders,Lucknow Uttar Pradesh,UP,2026-06-04,9000000054,charu.demo@aurawatt.in,Lucknow Uttar Pradesh 226018
+AW-LFP8507-26-0005,51.2V/100AH - HSN 8507,Akash Yadav,UP Solar Mart,Varanasi Uttar Pradesh,UP,2026-06-05,9000000055,akash.demo@aurawatt.in,Varanasi Uttar Pradesh 221011
+AW-LFP8507-26-0006,51.2V/100AH - HSN 8507,Shruti Nanda,North Star Solar,Ludhiana Punjab,Punjab,2026-06-06,9000000056,shruti.demo@aurawatt.in,Ludhiana Punjab 141012
+AW-LFP8507-26-0007,51.2V/100AH - HSN 8507,Yogesh Rathore,Rajasthan Solar Hub,Jaipur Rajasthan,Rajasthan,2026-06-07,9000000057,yogesh.demo@aurawatt.in,Jaipur Rajasthan 302021

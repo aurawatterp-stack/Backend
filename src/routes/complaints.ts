@@ -2,12 +2,12 @@ import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
 import { authenticate, requireAnyPermission } from "../middleware/auth";
-import type { AuthUser, Complaint } from "../types";
+import type { AuthUser, Complaint, Notification } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 
 const router: Router = express.Router();
-const MAX_ACTIVE_TICKETS_PER_ENGINEER = 5;
+const MAX_ACTIVE_L1_TICKETS = 5;
 
 const SERVICE_REGIONS = [
   {
@@ -71,6 +71,24 @@ function priorityRank(priority: string | undefined) {
   return 3;
 }
 
+function activeQueueRank(status: string | undefined) {
+  if (status === "In Progress at Aurawatt") return 0;
+  if (status === "Assigned to Engineer") return 1;
+  if (status === "Escalated to L2") return 2;
+  if (status === "Escalated to L3") return 3;
+  if (status === "Spare Requested") return 4;
+  if (status === "Dispatch in Progress") return 5;
+  return 6;
+}
+
+function sortForL1Queue(rows: Complaint[]) {
+  return [...rows].sort((a, b) => (
+    activeQueueRank(a.status) - activeQueueRank(b.status) ||
+    priorityRank(a.priority) - priorityRank(b.priority) ||
+    new Date(a.slaDueAt ?? a.createdAt).getTime() - new Date(b.slaDueAt ?? b.createdAt).getTime()
+  ));
+}
+
 function derivePriority(issueDescription: unknown, requestedPriority?: unknown) {
   const requested = normalizeText(requestedPriority);
   if (["Low", "Medium", "High", "Emergency"].includes(requested)) return requested as Complaint["priority"];
@@ -114,6 +132,10 @@ async function buildAssignment(input: {
   const regionConfig = input.region ? mapRegion(input.region) : mapRegion(input.siteLocation);
   const priority = derivePriority(input.issueDescription, input.priority);
   const now = new Date();
+  const activeL1TicketCount = await c.complaints.countDocuments({
+    type: "Consumer",
+    status: { $in: ACTIVE_ENGINEER_STATUSES },
+  });
 
   const engineerStats = await Promise.all(
     regionConfig.engineers.map(async (engineer) => ({
@@ -130,12 +152,12 @@ async function buildAssignment(input: {
     (preferred ? engineerStats.find((item) => item.name.toLowerCase() === preferred) : undefined) ??
     [...engineerStats].sort((a, b) => a.activeCount - b.activeCount)[0];
 
-  const canAssign = Boolean(engineer) && (input.forceAssign || engineer.activeCount < MAX_ACTIVE_TICKETS_PER_ENGINEER);
+  const canAssign = Boolean(engineer) && (input.forceAssign || activeL1TicketCount < MAX_ACTIVE_L1_TICKETS);
   const slaHours = parseSlaHours(input.l1Sla, priority);
 
   if (!canAssign || !engineer) {
     const queuePosition = (await c.complaints.countDocuments({
-      region: regionConfig.name,
+      type: "Consumer",
       assignmentStatus: "Waiting",
       status: "Waiting Lobby",
     })) + 1;
@@ -158,7 +180,7 @@ async function buildAssignment(input: {
     assignedEngineerId: engineer.id,
     assignedEngineerName: engineer.name,
     backupEngineerName: regionConfig.engineers.find((candidate) => candidate.id !== engineer.id)?.name,
-    activeTicketCountAtAssignment: engineer.activeCount,
+    activeTicketCountAtAssignment: activeL1TicketCount,
     slaStartedAt: now,
     slaDueAt: addHours(now, slaHours),
     slaPaused: false,
@@ -197,12 +219,84 @@ async function releaseNextWaitingTicket(region?: string) {
   );
 }
 
+async function rebalanceL1Queue() {
+  const c = await getCollections();
+  const active = await c.complaints
+    .find({ type: "Consumer", status: { $in: ACTIVE_ENGINEER_STATUSES } })
+    .toArray();
+  if (active.length <= MAX_ACTIVE_L1_TICKETS) return;
+
+  const overflow = sortForL1Queue(active).slice(MAX_ACTIVE_L1_TICKETS);
+  const waitingCount = await c.complaints.countDocuments({ type: "Consumer", assignmentStatus: "Waiting", status: "Waiting Lobby" });
+  const now = new Date();
+
+  await Promise.all(
+    overflow.map((complaint, index) => c.complaints.updateOne(
+      { id: complaint.id },
+      {
+        $set: {
+          assignmentStatus: "Waiting",
+          status: "Waiting Lobby",
+          waitingSince: complaint.waitingSince ?? now,
+          slaPaused: true,
+          queuePosition: waitingCount + index + 1,
+          updatedAt: now,
+        },
+        $unset: {
+          assignedEngineerId: "",
+          assignedEngineerName: "",
+          slaStartedAt: "",
+          slaDueAt: "",
+        },
+      }
+    ))
+  );
+}
+
 function requireComplaintTypeAccess(user: AuthUser, type: string): boolean {
   const t = (type || "").trim().toLowerCase();
   if (user.role === "Admin") return true;
   if (t === "consumer") return user.permissions.includes("complaints:consumer");
   if (t === "supplier") return user.permissions.includes("complaints:supplier");
   return user.permissions.includes("complaints:consumer") || user.permissions.includes("complaints:supplier");
+}
+
+function complaintRoleScope(user: AuthUser): Record<string, unknown> | null {
+  if (user.role === "L2 Technical Team") {
+    return {
+      $or: [
+        { escalationLevel: "L2" },
+        { status: "Escalated to L2" },
+      ],
+    };
+  }
+
+  if (user.role === "L3 Advanced OEM Support") {
+    return {
+      $or: [
+        { escalationLevel: "L3" },
+        { status: "Escalated to L3" },
+      ],
+    };
+  }
+
+  return null;
+}
+
+function applyComplaintRoleScope(filter: Record<string, unknown>, user: AuthUser) {
+  const scope = complaintRoleScope(user);
+  return scope ? { $and: [filter, scope] } : filter;
+}
+
+function canAccessComplaint(user: AuthUser, complaint: Complaint): boolean {
+  if (!requireComplaintTypeAccess(user, String(complaint.type))) return false;
+  if (user.role === "L2 Technical Team") {
+    return complaint.escalationLevel === "L2" || complaint.status === "Escalated to L2";
+  }
+  if (user.role === "L3 Advanced OEM Support") {
+    return complaint.escalationLevel === "L3" || complaint.status === "Escalated to L3";
+  }
+  return true;
 }
 
 /** GET /api/complaints — filter by type, status */
@@ -213,14 +307,18 @@ router.get("/", authenticate, requireAnyPermission("complaints:consumer", "compl
   if (type && !requireComplaintTypeAccess(user, type)) {
     return fail(res, "Access denied: insufficient permissions", 403);
   }
+  if (!type || String(type).toLowerCase() === "consumer") {
+    await rebalanceL1Queue();
+  }
   const filter: Record<string, unknown> = {};
   if (type) filter.type = type;
   if (status) filter.status = status;
+  const scopedFilter = applyComplaintRoleScope(filter, user);
 
   const p = Math.max(1, parseInt(page));
   const l = Math.min(100, parseInt(limit));
-  const total = await c.complaints.countDocuments(filter);
-  const data = await c.complaints.find(filter).skip((p - 1) * l).limit(l).toArray();
+  const total = await c.complaints.countDocuments(scopedFilter);
+  const data = await c.complaints.find(scopedFilter).skip((p - 1) * l).limit(l).toArray();
   return ok(res, { data, total, page: p, limit: l });
 });
 
@@ -389,7 +487,7 @@ router.put(
   const existing = await c.complaints.findOne({ id });
   if (!existing) return fail(res, "Complaint not found", 404);
   const user = (req as any).user as AuthUser;
-  if (!requireComplaintTypeAccess(user, String(existing.type))) {
+  if (!canAccessComplaint(user, existing)) {
     return fail(res, "Access denied: insufficient permissions", 403);
   }
   const { status } = req.body;
@@ -397,7 +495,7 @@ router.put(
   const updatedAt = new Date();
   await c.complaints.updateOne({ id }, { $set: { status, updatedAt } });
   if (CLOSED_STATUSES.includes(String(status))) {
-    await releaseNextWaitingTicket(existing.region);
+    await releaseNextWaitingTicket();
   }
   return ok(res, { ...existing, status, updatedAt });
   }
@@ -414,15 +512,12 @@ router.put(
     const existing = await c.complaints.findOne({ id });
     if (!existing) return fail(res, "Complaint not found", 404);
     const user = (req as any).user as AuthUser;
-    if (!requireComplaintTypeAccess(user, String(existing.type))) {
+    if (!canAccessComplaint(user, existing)) {
       return fail(res, "Access denied: insufficient permissions", 403);
     }
 
     const nextInspection = req.body.l1Inspection ?? existing.l1Inspection;
     const l1InspectionValid = isL1InspectionValid(nextInspection);
-    if (["L2", "L3"].includes(String(req.body.escalationLevel ?? existing.escalationLevel ?? "")) && !l1InspectionValid) {
-      return fail(res, "L1 inspection readings are mandatory before L2/L3 escalation");
-    }
 
     const allowedFields = [
       "dealerName",
@@ -477,9 +572,30 @@ router.put(
 
     await c.complaints.updateOne({ id }, { $set: update });
     if (CLOSED_STATUSES.includes(String(update.status))) {
-      await releaseNextWaitingTicket(existing.region);
+      await releaseNextWaitingTicket();
     }
     const updated = await c.complaints.findOne({ id });
+    if (updated && req.body.notifyAdminOnCompletion && CLOSED_STATUSES.includes(String(update.status))) {
+      const notification: Notification = {
+        id: generateId(),
+        type: "complaint_completed",
+        title: "Complaint completed by service team",
+        body: `${updated.productSerialNo || "No serial"} resolved. ${updated.finalResolution || "Final resolution submitted."}`,
+        entityType: "complaint",
+        entityId: updated.id,
+        meta: {
+          serialNumber: updated.productSerialNo,
+          status: updated.status,
+          escalationLevel: updated.escalationLevel,
+          finalResolution: updated.finalResolution,
+        },
+        audienceRoles: ["Admin"],
+        readBy: [],
+        createdBy: user.userId,
+        createdAt: new Date(),
+      };
+      await c.notifications.insertOne(notification);
+    }
     return ok(res, updated);
   }
 );

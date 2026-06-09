@@ -71,10 +71,12 @@ async function initDatabase() {
             $setOnInsert: {
                 id: (0, id_1.generateId)(),
                 name,
-                permissions,
                 isSystem: true,
                 createdAt: now,
                 updatedAt: now,
+            },
+            $addToSet: {
+                permissions: { $each: permissions },
             },
         }, { upsert: true });
     }

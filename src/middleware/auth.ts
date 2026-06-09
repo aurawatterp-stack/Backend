@@ -2,7 +2,7 @@ import type { NextFunction, Request, Response } from "express";
 import jwt from "jsonwebtoken";
 
 import { CONFIG } from "../config";
-import { normalizeRole } from "../rbac";
+import { DEFAULT_ROLE_PERMISSIONS, normalizeRole } from "../rbac";
 import { getCollections } from "../db/collections";
 import type { AuthUser, JwtPayload, Permission, RoleName } from "../types";
 import { fail } from "../utils/http";
@@ -19,7 +19,8 @@ async function permissionsForRole(role: RoleName): Promise<Permission[]> {
 
   const c = await getCollections();
   const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
-  const perms = (doc?.permissions ?? []) as Permission[];
+  const defaults = DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? [];
+  const perms = Array.from(new Set([...(doc?.permissions ?? []), ...defaults])) as Permission[];
   rolePermCache.set(role, { perms, expiresAt: now + 30_000 });
   return perms;
 }

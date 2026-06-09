@@ -222,6 +222,8 @@ export type Sale = {
   referenceNo: string;
   saleDate: Date;
   customerId?: string;
+  customerName?: string;
+  dealerName?: string;
   unregisteredCustomerName?: string;
   unregisteredCustomerAddress?: string;
   unregisteredCustomerGst?: string;
@@ -380,6 +382,7 @@ export type NotificationType =
   | "raw_material_received"
   | "manufactured_created"
   | "complaint_created"
+  | "complaint_completed"
   | "customer_registration_requested"
   | "user_registered";
 

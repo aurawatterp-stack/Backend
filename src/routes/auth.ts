@@ -16,7 +16,8 @@ async function permissionsForRole(role: RoleName): Promise<Permission[]> {
   if (role === "Admin") return [];
   const c = await getCollections();
   const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
-  return (doc?.permissions ?? DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? []) as Permission[];
+  const defaults = DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? [];
+  return Array.from(new Set([...(doc?.permissions ?? []), ...defaults])) as Permission[];
 }
 
 async function resolveLoginUser(email: string, password: string): Promise<User | null> {

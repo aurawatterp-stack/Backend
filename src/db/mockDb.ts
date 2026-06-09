@@ -54,7 +54,7 @@ export const db = {
       id: "u4",
       email: "sales@avavbusiness.com",
       passwordHash: bcrypt.hashSync("Sales@123", 10),
-      name: "Sales Team",
+      name: "Sales Manager",
       mobile: "9380482094",
       role: "Sales Manager" as UserRole,
       isActive: true,

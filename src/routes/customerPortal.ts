@@ -203,8 +203,8 @@ router.post("/complaints", async (req: Request, res: Response) => {
     const notification: Notification = {
       id: generateId(),
       type: "complaint_created",
-      title: "Customer complaint raised",
-      body: `${complaint.productSerialNo} • ${complaint.customerName || "Customer"} • ${complaint.customerPhone || "No mobile"}`,
+      title: "QR complaint received",
+      body: `${complaint.productSerialNo} • ${complaint.customerName || "Customer"} • ${complaint.customerPhone || "No mobile"} • Sales/Admin review required`,
       entityType: "complaint",
       entityId: complaint.id,
       meta: {
@@ -212,9 +212,11 @@ router.post("/complaints", async (req: Request, res: Response) => {
         customerName: complaint.customerName,
         customerPhone: complaint.customerPhone,
         customerEmail: complaint.customerEmail,
+        issueDescription: complaint.issueDescription,
+        siteLocation: complaint.siteLocation,
         ticketSource: "Link",
       },
-      audienceRoles: ["Admin", "L1 Engineer", "L2 Technical Team"],
+      audienceRoles: ["Admin", "Sales"],
       readBy: [],
       createdBy: "customer-portal",
       createdAt: now,

@@ -24,7 +24,8 @@ async function permissionsForRole(role) {
         return cached.perms;
     const c = await (0, collections_1.getCollections)();
     const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
-    const perms = (doc?.permissions ?? []);
+    const defaults = rbac_1.DEFAULT_ROLE_PERMISSIONS[role] ?? [];
+    const perms = Array.from(new Set([...(doc?.permissions ?? []), ...defaults]));
     rolePermCache.set(role, { perms, expiresAt: now + 30_000 });
     return perms;
 }

@@ -1,5 +1,10 @@
 "use strict";
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+const node_fs_1 = require("node:fs");
+const node_path_1 = __importDefault(require("node:path"));
 const connect_1 = require("../db/connect");
 const collections_1 = require("../db/collections");
 const init_1 = require("../db/init");
@@ -56,6 +61,97 @@ const demoProducts = [
         prefix: "AW-LFP8507-26",
     },
 ];
+function parseCsvLine(line) {
+    const cells = [];
+    let current = "";
+    let inQuotes = false;
+    for (let i = 0; i < line.length; i += 1) {
+        const char = line[i];
+        const next = line[i + 1];
+        if (char === '"' && next === '"') {
+            current += '"';
+            i += 1;
+        }
+        else if (char === '"') {
+            inQuotes = !inQuotes;
+        }
+        else if (char === "," && !inQuotes) {
+            cells.push(current.trim());
+            current = "";
+        }
+        else {
+            current += char;
+        }
+    }
+    cells.push(current.trim());
+    return cells;
+}
+function loadDemoInventoryRows() {
+    const filePath = node_path_1.default.resolve(process.cwd(), "demo-inventory-serials.csv");
+    const text = (0, node_fs_1.readFileSync)(filePath, "utf8").trim();
+    const [headerLine, ...lines] = text.split(/\r?\n/).filter(Boolean);
+    const headers = parseCsvLine(headerLine).map((header) => header.trim());
+    return lines.map((line) => {
+        const cells = parseCsvLine(line);
+        const row = Object.fromEntries(headers.map((header, index) => [header, cells[index] ?? ""]));
+        return {
+            serial: row.serial,
+            productModel: row.productModel,
+            customerName: row.customerName,
+            dealerName: row.dealerName,
+            cityLocation: row.cityLocation,
+            region: row.region,
+            dateOfSale: row.dateOfSale,
+            customerPhone: row.customerPhone,
+            customerEmail: row.customerEmail,
+            customerAddress: row.customerAddress,
+        };
+    }).filter((row) => row.serial);
+}
+function slug(value) {
+    return value.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)/g, "").slice(0, 60) || (0, id_1.generateId)();
+}
+function productForSerial(serialNumber) {
+    return demoProducts.find((product) => serialNumber.startsWith(product.prefix));
+}
+async function upsertDemoCustomer(row) {
+    const c = await (0, collections_1.getCollections)();
+    const name = row.dealerName || row.customerName;
+    if (!name)
+        return undefined;
+    const now = new Date();
+    const id = `demo-customer-${slug(name)}`;
+    const customer = {
+        id,
+        name,
+        type: "Distributor",
+        email: row.customerEmail || `${slug(name)}@demo.aurawatt.in`,
+        phone: row.customerPhone || "0000000000",
+        status: "Active",
+        address: row.customerAddress || row.cityLocation,
+        stateRegion: row.region,
+        createdAt: now,
+        updatedAt: now,
+    };
+    await c.customers.updateOne({ id }, {
+        $set: {
+            name: customer.name,
+            type: customer.type,
+            email: customer.email,
+            phone: customer.phone,
+            status: customer.status,
+            address: customer.address,
+            stateRegion: customer.stateRegion,
+            updatedAt: now,
+        },
+        $setOnInsert: {
+            id: customer.id,
+            createdAt: now,
+        },
+    }, { upsert: true });
+    const saved = await c.customers.findOne({ id });
+    return saved ?? customer;
+}
 async function upsertProduct(product) {
     const c = await (0, collections_1.getCollections)();
     const now = new Date();
@@ -100,9 +196,13 @@ async function main() {
     const c = await (0, collections_1.getCollections)();
     const now = new Date();
     const mfgDate = new Date("2026-06-04T00:00:00.000Z");
+    const demoRows = loadDemoInventoryRows();
     let productsReady = 0;
     let serialsInserted = 0;
     let manufacturedInserted = 0;
+    let manufacturedUpdated = 0;
+    let salesUpserted = 0;
+    let customersUpserted = 0;
     let duplicatesSkipped = 0;
     for (const demoProduct of demoProducts) {
         const product = await upsertProduct(demoProduct);
@@ -142,9 +242,93 @@ async function main() {
             manufacturedInserted += 1;
         }
     }
+    for (const row of demoRows) {
+        const demoProduct = demoProducts.find((product) => product.model === row.productModel) ?? productForSerial(row.serial);
+        if (!demoProduct)
+            continue;
+        const product = await upsertProduct(demoProduct);
+        const customer = await upsertDemoCustomer(row);
+        if (customer)
+            customersUpserted += 1;
+        const saleDate = row.dateOfSale ? new Date(`${row.dateOfSale}T00:00:00.000Z`) : new Date("2026-06-06T00:00:00.000Z");
+        const referenceNo = `DEMO-SALE-${row.serial}`;
+        const sale = {
+            id: `demo-sale-${slug(row.serial)}`,
+            serialNumber: row.serial,
+            documentType: "Sales Invoice",
+            referenceNo,
+            saleDate,
+            customerId: customer?.id,
+            customerName: row.customerName,
+            dealerName: row.dealerName,
+            unregisteredCustomerName: row.dealerName || row.customerName,
+            unregisteredCustomerAddress: row.customerAddress || row.cityLocation,
+            materialName: product.model,
+            quantity: 1,
+            stateRegion: row.region,
+            dealerRegistered: Boolean(customer),
+            priceCategory: "Dealer Price",
+            inventoryStatus: "Available",
+            dispatchStatus: "Delivered",
+            paymentStatus: "Confirmed",
+            createdBy: "seed:inventory",
+            createdAt: now,
+        };
+        await c.sales.updateOne({ referenceNo }, {
+            $set: {
+                serialNumber: sale.serialNumber,
+                documentType: sale.documentType,
+                saleDate: sale.saleDate,
+                customerId: sale.customerId,
+                customerName: sale.customerName,
+                dealerName: sale.dealerName,
+                unregisteredCustomerName: sale.unregisteredCustomerName,
+                unregisteredCustomerAddress: sale.unregisteredCustomerAddress,
+                materialName: sale.materialName,
+                quantity: sale.quantity,
+                stateRegion: sale.stateRegion,
+                dealerRegistered: sale.dealerRegistered,
+                priceCategory: sale.priceCategory,
+                inventoryStatus: sale.inventoryStatus,
+                dispatchStatus: sale.dispatchStatus,
+                paymentStatus: sale.paymentStatus,
+            },
+            $setOnInsert: {
+                id: sale.id,
+                referenceNo: sale.referenceNo,
+                createdBy: sale.createdBy,
+                createdAt: sale.createdAt,
+            },
+        }, { upsert: true });
+        salesUpserted += 1;
+        const result = await c.manufactured.updateOne({ serialNumber: row.serial }, {
+            $set: {
+                productId: product.id,
+                status: "Sold",
+                invoiceNo: referenceNo,
+                paymentStatus: "Verified",
+                customerId: customer?.id,
+                soldDate: saleDate,
+                updatedAt: now,
+            },
+            $setOnInsert: {
+                id: (0, id_1.generateId)(),
+                serialNumber: row.serial,
+                mfgDate,
+                createdAt: now,
+            },
+        }, { upsert: true });
+        if (result.upsertedCount)
+            manufacturedInserted += 1;
+        if (result.modifiedCount)
+            manufacturedUpdated += 1;
+    }
     console.log(`Products ready: ${productsReady}`);
     console.log(`Serial pool entries inserted: ${serialsInserted}`);
     console.log(`Manufactured In Stock entries inserted: ${manufacturedInserted}`);
+    console.log(`Manufactured sold links updated: ${manufacturedUpdated}`);
+    console.log(`Demo customers upserted: ${customersUpserted}`);
+    console.log(`Demo sales upserted: ${salesUpserted}`);
     console.log(`Duplicate manufactured serials skipped: ${duplicatesSkipped}`);
 }
 main().catch((err) => {

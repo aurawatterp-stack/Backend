@@ -73,7 +73,7 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers
         filter.type = type;
     const total = await c.customers.countDocuments(filter);
     const p = Math.max(1, parseInt(page));
-    const l = Math.min(100, parseInt(limit));
+    const l = Math.min(1000, parseInt(limit));
     const data = await c.customers.find(filter).skip((p - 1) * l).limit(l).toArray();
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });

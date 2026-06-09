@@ -18,7 +18,8 @@ async function permissionsForRole(role) {
         return [];
     const c = await (0, collections_1.getCollections)();
     const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
-    return (doc?.permissions ?? rbac_1.DEFAULT_ROLE_PERMISSIONS[role] ?? []);
+    const defaults = rbac_1.DEFAULT_ROLE_PERMISSIONS[role] ?? [];
+    return Array.from(new Set([...(doc?.permissions ?? []), ...defaults]));
 }
 async function resolveLoginUser(email, password) {
     const c = await (0, collections_1.getCollections)();
