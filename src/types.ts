@@ -39,7 +39,7 @@ export type JwtPayload = {
 };
 
 /** `req.user` after authentication (JWT + resolved permissions). */
-export type AuthUser = JwtPayload & { permissions: Permission[] };
+export type AuthUser = JwtPayload & { permissions: Permission[]; name?: string };
 
 export type LoginRequest = {
   email: string;
@@ -332,6 +332,10 @@ export type Complaint = {
   assignedEngineerName?: string;
   backupEngineerName?: string;
   activeTicketCountAtAssignment?: number;
+  escalatedById?: string;
+  escalatedByName?: string;
+  escalatedByRole?: string;
+  escalatedAt?: Date;
   waitingSince?: Date;
   slaStartedAt?: Date;
   slaDueAt?: Date;
@@ -345,6 +349,8 @@ export type Complaint = {
   technicalDiagnosis?: string;
   spareRequired?: boolean;
   spareName?: string;
+  spareQuantity?: number;
+  spareDispatchAddress?: string;
   spareInventoryStatus?: "Not Required" | "Available" | "Procurement Required";
   spareRequestStatus?: "Not Required" | "Requested" | "Reserved" | "Dispatched" | "Procurement Triggered" | string;
   dispatchTrackingNo?: string;
@@ -352,6 +358,12 @@ export type Complaint = {
   chargeableApprovalStatus?: "Not Required" | "Pending" | "Approved" | "Rejected" | string;
   paymentVerificationStatus?: "Pending" | "Verified" | string;
   replacementApprovalStatus?: "Not Required" | "Pending Accounts" | "Approved" | "Rejected" | string;
+  replacementRecommended?: boolean;
+  replacementProductName?: string;
+  replacementProductNo?: string;
+  replacementSerialNo?: string;
+  replacementEngineerId?: string;
+  replacementEngineerName?: string;
   dispatchPlan?: string;
   siteVisitRequired?: boolean;
   engineerName?: string;

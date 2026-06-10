@@ -36,7 +36,9 @@ export async function authenticate(req: Request, res: Response, next: NextFuncti
     const decoded = jwt.verify(token, CONFIG.JWT_SECRET) as JwtPayload;
     const role = normalizeRole((decoded as any).role);
     const permissions = await permissionsForRole(role);
-    (req as any).user = { ...decoded, role, permissions } satisfies AuthUser;
+    const c = await getCollections();
+    const user = await c.users.findOne({ id: decoded.userId }, { projection: { name: 1 } });
+    (req as any).user = { ...decoded, role, permissions, name: user?.name } satisfies AuthUser;
     next();
   } catch {
     return fail(res, "Invalid or expired token", 401);

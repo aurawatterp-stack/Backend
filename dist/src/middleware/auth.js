@@ -39,7 +39,9 @@ async function authenticate(req, res, next) {
         const decoded = jsonwebtoken_1.default.verify(token, config_1.CONFIG.JWT_SECRET);
         const role = (0, rbac_1.normalizeRole)(decoded.role);
         const permissions = await permissionsForRole(role);
-        req.user = { ...decoded, role, permissions };
+        const c = await (0, collections_1.getCollections)();
+        const user = await c.users.findOne({ id: decoded.userId }, { projection: { name: 1 } });
+        req.user = { ...decoded, role, permissions, name: user?.name };
         next();
     }
     catch {

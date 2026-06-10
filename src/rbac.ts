@@ -35,7 +35,7 @@ export const SYSTEM_ROLES: SystemRoleName[] = [
 export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
   Admin: ALL_PERMISSIONS,
   Inventory: ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured"],
-  Sales: ["dashboard:view", "sales:entry", "complaints:consumer"],
+  Sales: ["dashboard:view", "sales:entry"],
   Dispatch: ["dashboard:view", "dispatch:manage"],
   Accounts: ["dashboard:view", "accounts:manage"],
   Distributor: ["dashboard:view"],

@@ -10,6 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 const MAX_ACTIVE_L1_TICKETS = 5;
+const MAX_ACTIVE_SERVICE_TICKETS = 5;
 const SERVICE_REGIONS = [
     {
         name: "NCR",
@@ -53,6 +54,11 @@ const ACTIVE_ENGINEER_STATUSES = [
     "Dispatch in Progress",
 ];
 const CLOSED_STATUSES = ["Resolved by Aurawatt", "Resolved by Suppliers"];
+const SERVICE_ROLE_BY_LEVEL = {
+    L1: "L1 Engineer",
+    L2: "L2 Technical Team",
+    L3: "L3 Advanced OEM Support",
+};
 function normalizeText(value) {
     return String(value ?? "").trim();
 }
@@ -120,58 +126,95 @@ function isL1InspectionValid(inspection) {
     const hasDc = dcRequired.every((key) => Number.isFinite(Number(inspection.dcReadings?.[key])));
     return Boolean(inspection.errorCode && inspection.observationNotes && hasAc && hasDc);
 }
-async function buildAssignment(input) {
+function normalizeServiceLevel(value) {
+    const raw = normalizeText(value).toUpperCase();
+    if (raw === "L2")
+        return "L2";
+    if (raw === "L3")
+        return "L3";
+    return "L1";
+}
+async function activeTicketCountForEngineer(engineerId, excludeComplaintId) {
+    const c = await (0, collections_1.getCollections)();
+    const filter = {
+        assignedEngineerId: engineerId,
+        status: { $in: ACTIVE_ENGINEER_STATUSES },
+    };
+    if (excludeComplaintId)
+        filter.id = { $ne: excludeComplaintId };
+    return c.complaints.countDocuments(filter);
+}
+async function serviceEngineers(level) {
+    const c = await (0, collections_1.getCollections)();
+    const roles = level
+        ? [SERVICE_ROLE_BY_LEVEL[level]]
+        : Object.values(SERVICE_ROLE_BY_LEVEL);
+    const users = await c.users
+        .find({ role: { $in: roles }, isActive: { $ne: false } }, { projection: { id: 1, name: 1, email: 1, role: 1 } })
+        .sort({ name: 1 })
+        .toArray();
+    return users.map((user) => ({ id: user.id, name: user.name, email: user.email, role: user.role }));
+}
+async function buildServiceAssignment(input) {
     const c = await (0, collections_1.getCollections)();
     const regionConfig = input.region ? mapRegion(input.region) : mapRegion(input.siteLocation);
     const priority = derivePriority(input.issueDescription, input.priority);
     const now = new Date();
-    const activeL1TicketCount = await c.complaints.countDocuments({
-        type: "Consumer",
-        status: { $in: ACTIVE_ENGINEER_STATUSES },
-    });
-    const engineerStats = await Promise.all(regionConfig.engineers.map(async (engineer) => ({
+    const engineers = await serviceEngineers(input.level);
+    const engineerStats = await Promise.all(engineers.map(async (engineer) => ({
         ...engineer,
-        activeCount: await c.complaints.countDocuments({
-            assignedEngineerId: engineer.id,
-            status: { $in: ACTIVE_ENGINEER_STATUSES },
-        }),
+        activeCount: await activeTicketCountForEngineer(engineer.id, input.excludeComplaintId),
     })));
-    const preferred = normalizeText(input.preferredEngineerName).toLowerCase();
-    const engineer = (preferred ? engineerStats.find((item) => item.name.toLowerCase() === preferred) : undefined) ??
-        [...engineerStats].sort((a, b) => a.activeCount - b.activeCount)[0];
-    const canAssign = Boolean(engineer) && (input.forceAssign || activeL1TicketCount < MAX_ACTIVE_L1_TICKETS);
-    const slaHours = parseSlaHours(input.l1Sla, priority);
+    const preferredId = normalizeText(input.preferredEngineerId);
+    const preferredName = normalizeText(input.preferredEngineerName).toLowerCase();
+    const preferredEngineer = (preferredId ? engineerStats.find((item) => item.id === preferredId) : undefined) ??
+        (preferredName ? engineerStats.find((item) => item.name.toLowerCase() === preferredName) : undefined);
+    const engineer = preferredEngineer ?? [...engineerStats].sort((a, b) => a.activeCount - b.activeCount || a.name.localeCompare(b.name))[0];
+    const canAssign = Boolean(engineer) && (input.forceAssign || (engineer?.activeCount ?? 0) < MAX_ACTIVE_SERVICE_TICKETS);
     if (!canAssign || !engineer) {
         const queuePosition = (await c.complaints.countDocuments({
             type: "Consumer",
             assignmentStatus: "Waiting",
+            escalationLevel: input.level,
             status: "Waiting Lobby",
         })) + 1;
         return {
             region: regionConfig.name,
             priority,
+            escalationLevel: input.level,
             assignmentStatus: "Waiting",
-            backupEngineerName: regionConfig.engineers[1]?.name,
             waitingSince: now,
             slaPaused: true,
             queuePosition,
             status: "Waiting Lobby",
+            assignedEngineerId: undefined,
+            assignedEngineerName: undefined,
         };
     }
+    const slaHours = parseSlaHours(input.l1Sla, priority);
+    const statusByLevel = {
+        L1: "Assigned to Engineer",
+        L2: "Escalated to L2",
+        L3: "Escalated to L3",
+    };
     return {
         region: regionConfig.name,
         priority,
+        escalationLevel: input.level,
         assignmentStatus: "Assigned",
         assignedEngineerId: engineer.id,
         assignedEngineerName: engineer.name,
-        backupEngineerName: regionConfig.engineers.find((candidate) => candidate.id !== engineer.id)?.name,
-        activeTicketCountAtAssignment: activeL1TicketCount,
+        backupEngineerName: engineerStats.find((candidate) => candidate.id !== engineer.id)?.name,
+        activeTicketCountAtAssignment: engineer.activeCount,
         slaStartedAt: now,
         slaDueAt: addHours(now, slaHours),
         slaPaused: false,
         queuePosition: undefined,
-        status: "Assigned to Engineer",
+        status: statusByLevel[input.level],
     };
+}
+async function buildAssignment(input) {
+    return buildServiceAssignment({ ...input, level: "L1" });
 }
 async function releaseNextWaitingTicket(region) {
     const c = await (0, collections_1.getCollections)();
@@ -185,12 +228,15 @@ async function releaseNextWaitingTicket(region) {
         .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || new Date(a.waitingSince ?? a.createdAt).getTime() - new Date(b.waitingSince ?? b.createdAt).getTime())[0];
     if (!next)
         return;
-    const assignment = await buildAssignment({
+    const level = normalizeServiceLevel(next.escalationLevel);
+    const assignment = await buildServiceAssignment({
+        level,
         issueDescription: next.issueDescription,
         siteLocation: next.siteLocation,
         region: next.region,
         priority: next.priority,
         l1Sla: next.l1Sla,
+        excludeComplaintId: next.id,
     });
     if (assignment.assignmentStatus !== "Assigned")
         return;
@@ -205,11 +251,23 @@ async function releaseNextWaitingTicket(region) {
 async function rebalanceL1Queue() {
     const c = await (0, collections_1.getCollections)();
     const active = await c.complaints
-        .find({ type: "Consumer", status: { $in: ACTIVE_ENGINEER_STATUSES } })
+        .find({
+        type: "Consumer",
+        status: { $in: ACTIVE_ENGINEER_STATUSES },
+        $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }],
+    })
         .toArray();
-    if (active.length <= MAX_ACTIVE_L1_TICKETS)
+    const byEngineer = new Map();
+    for (const complaint of active) {
+        if (!complaint.assignedEngineerId)
+            continue;
+        const rows = byEngineer.get(complaint.assignedEngineerId) ?? [];
+        rows.push(complaint);
+        byEngineer.set(complaint.assignedEngineerId, rows);
+    }
+    const overflow = [...byEngineer.values()].flatMap((rows) => (rows.length > MAX_ACTIVE_L1_TICKETS ? sortForL1Queue(rows).slice(MAX_ACTIVE_L1_TICKETS) : []));
+    if (!overflow.length)
         return;
-    const overflow = sortForL1Queue(active).slice(MAX_ACTIVE_L1_TICKETS);
     const waitingCount = await c.complaints.countDocuments({ type: "Consumer", assignmentStatus: "Waiting", status: "Waiting Lobby" });
     const now = new Date();
     await Promise.all(overflow.map((complaint, index) => c.complaints.updateOne({ id: complaint.id }, {
@@ -234,27 +292,32 @@ function requireComplaintTypeAccess(user, type) {
     if (user.role === "Admin")
         return true;
     if (t === "consumer")
-        return user.permissions.includes("complaints:consumer");
+        return user.permissions.includes("complaints:consumer") || user.permissions.includes("dispatch:manage");
     if (t === "supplier")
         return user.permissions.includes("complaints:supplier");
     return user.permissions.includes("complaints:consumer") || user.permissions.includes("complaints:supplier");
 }
 function complaintRoleScope(user) {
+    if (user.role === "L1 Engineer") {
+        return {
+            $or: [
+                { assignedEngineerId: user.userId },
+                ...(user.name ? [{ assignedEngineerName: user.name }] : []),
+                { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
+            ],
+        };
+    }
     if (user.role === "L2 Technical Team") {
         return {
             $or: [
-                { escalationLevel: "L2" },
-                { status: "Escalated to L2" },
+                { assignedEngineerId: user.userId },
+                ...(user.name ? [{ assignedEngineerName: user.name }] : []),
+                { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
             ],
         };
     }
     if (user.role === "L3 Advanced OEM Support") {
-        return {
-            $or: [
-                { escalationLevel: "L3" },
-                { status: "Escalated to L3" },
-            ],
-        };
+        return null;
     }
     return null;
 }
@@ -265,16 +328,23 @@ function applyComplaintRoleScope(filter, user) {
 function canAccessComplaint(user, complaint) {
     if (!requireComplaintTypeAccess(user, String(complaint.type)))
         return false;
+    if (user.role === "L1 Engineer") {
+        return (complaint.assignedEngineerId === user.userId ||
+            (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
+            (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1"));
+    }
     if (user.role === "L2 Technical Team") {
-        return complaint.escalationLevel === "L2" || complaint.status === "Escalated to L2";
+        return (complaint.assignedEngineerId === user.userId ||
+            (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
+            (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2"));
     }
     if (user.role === "L3 Advanced OEM Support") {
-        return complaint.escalationLevel === "L3" || complaint.status === "Escalated to L3";
+        return true;
     }
     return true;
 }
 /** GET /api/complaints — filter by type, status */
-router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { type, status, page = "1", limit = "20" } = req.query;
     const user = req.user;
@@ -315,14 +385,22 @@ router.get("/stats", auth_1.authenticate, (0, auth_1.requireAnyPermission)("comp
     const stats = await Promise.all(statuses.map(async (s) => ({ status: s, count: await c.complaints.countDocuments({ status: s }) })));
     return (0, http_1.ok)(res, stats);
 });
+/** GET /api/complaints/service-engineers — active L1/L2/L3 engineer accounts */
+router.get("/service-engineers", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (_req, res) => {
+    const engineers = await serviceEngineers();
+    return (0, http_1.ok)(res, engineers);
+});
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, technicalDiagnosis, spareRequired, spareName, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, } = req.body;
+    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, } = req.body;
     if (!type || !dateOfComplaint || !issueDescription) {
         return (0, http_1.fail)(res, "type, dateOfComplaint, issueDescription are required");
     }
     const user = req.user;
+    if (user.role === "Sales") {
+        return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
+    }
     if (!requireComplaintTypeAccess(user, String(type))) {
         return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
     }
@@ -365,6 +443,10 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         assignedEngineerName: assignment?.assignedEngineerName,
         backupEngineerName: assignment?.backupEngineerName ?? backupEngineerName,
         activeTicketCountAtAssignment: assignment?.activeTicketCountAtAssignment,
+        escalatedById: undefined,
+        escalatedByName: undefined,
+        escalatedByRole: undefined,
+        escalatedAt: undefined,
         waitingSince: assignment?.waitingSince,
         slaStartedAt: assignment?.slaStartedAt,
         slaDueAt: assignment?.slaDueAt,
@@ -378,6 +460,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         technicalDiagnosis,
         spareRequired,
         spareName,
+        spareQuantity: spareQuantity ? Number(spareQuantity) : undefined,
+        spareDispatchAddress,
         spareInventoryStatus,
         spareRequestStatus,
         dispatchTrackingNo,
@@ -385,6 +469,12 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         chargeableApprovalStatus,
         paymentVerificationStatus,
         replacementApprovalStatus,
+        replacementRecommended,
+        replacementProductName,
+        replacementProductNo,
+        replacementSerialNo,
+        replacementEngineerId,
+        replacementEngineerName,
         dispatchPlan,
         siteVisitRequired,
         engineerName,
@@ -401,7 +491,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
     return (0, http_1.ok)(res, complaint, 201);
 });
 /** PUT /api/complaints/:id/status — update complaint status */
-router.put("/:id/status", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
+router.put("/:id/status", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.complaints.findOne({ id });
@@ -422,7 +512,7 @@ router.put("/:id/status", auth_1.authenticate, (0, auth_1.requireAnyPermission)(
     return (0, http_1.ok)(res, { ...existing, status, updatedAt });
 });
 /** PUT /api/complaints/:id/service — update service workflow fields */
-router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
+router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.complaints.findOne({ id });
@@ -443,6 +533,10 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "warrantyStatus",
         "productModel",
         "backupEngineerName",
+        "escalatedById",
+        "escalatedByName",
+        "escalatedByRole",
+        "escalatedAt",
         "initialAction",
         "trackingNotes",
         "escalationLevel",
@@ -450,6 +544,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "technicalDiagnosis",
         "spareRequired",
         "spareName",
+        "spareQuantity",
+        "spareDispatchAddress",
         "spareInventoryStatus",
         "spareRequestStatus",
         "dispatchTrackingNo",
@@ -457,6 +553,12 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "chargeableApprovalStatus",
         "paymentVerificationStatus",
         "replacementApprovalStatus",
+        "replacementRecommended",
+        "replacementProductName",
+        "replacementProductNo",
+        "replacementSerialNo",
+        "replacementEngineerId",
+        "replacementEngineerName",
         "dispatchPlan",
         "siteVisitRequired",
         "engineerName",
@@ -482,6 +584,67 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             preferredEngineerName: req.body.reassignEngineerName ?? req.body.engineerName,
         });
         Object.assign(update, assignment);
+    }
+    const requestedAssignToId = normalizeText(req.body.assignToEngineerId);
+    const requestedAssignToRole = normalizeText(req.body.assignToRole);
+    if (requestedAssignToId) {
+        const level = requestedAssignToRole.includes("L2")
+            ? "L2"
+            : requestedAssignToRole.includes("L3")
+                ? "L3"
+                : "L1";
+        const candidates = await serviceEngineers(level);
+        const target = candidates.find((candidate) => candidate.id === requestedAssignToId);
+        if (!target)
+            return (0, http_1.fail)(res, "Selected engineer not found", 404);
+        const activeCount = await activeTicketCountForEngineer(target.id, existing.id);
+        if (!req.body.forceAssign && activeCount >= MAX_ACTIVE_SERVICE_TICKETS) {
+            return (0, http_1.fail)(res, `${target.name} already has ${MAX_ACTIVE_SERVICE_TICKETS} active tickets`, 400);
+        }
+        const statusByLevel = {
+            L1: "Assigned to Engineer",
+            L2: "Escalated to L2",
+            L3: "Escalated to L3",
+        };
+        Object.assign(update, {
+            escalationLevel: level,
+            assignmentStatus: "Assigned",
+            assignedEngineerId: target.id,
+            assignedEngineerName: target.name,
+            activeTicketCountAtAssignment: activeCount,
+            status: req.body.status ?? statusByLevel[level],
+            slaPaused: false,
+            waitingSince: undefined,
+            queuePosition: undefined,
+        });
+    }
+    else {
+        const targetLevel = req.body.status === "Escalated to L2" || req.body.escalationLevel === "L2"
+            ? "L2"
+            : req.body.status === "Escalated to L3" || req.body.escalationLevel === "L3"
+                ? "L3"
+                : undefined;
+        if (targetLevel && !CLOSED_STATUSES.includes(String(update.status))) {
+            const assignment = await buildServiceAssignment({
+                level: targetLevel,
+                issueDescription: req.body.issueDescription ?? existing.issueDescription,
+                siteLocation: req.body.siteLocation ?? existing.siteLocation,
+                region: req.body.region ?? existing.region,
+                priority: req.body.priority ?? existing.priority,
+                l1Sla: existing.l1Sla,
+                forceAssign: Boolean(req.body.forceAssign),
+                preferredEngineerId: req.body.preferredEngineerId,
+                preferredEngineerName: req.body.preferredEngineerName ?? req.body.engineerName,
+                excludeComplaintId: existing.id,
+            });
+            Object.assign(update, assignment);
+        }
+    }
+    if (req.body.status === "Escalated to L2" || req.body.status === "Escalated to L3") {
+        update.escalatedById = req.body.escalatedById ?? user.userId;
+        update.escalatedByName = req.body.escalatedByName ?? user.email;
+        update.escalatedByRole = req.body.escalatedByRole ?? user.role;
+        update.escalatedAt = new Date();
     }
     await c.complaints.updateOne({ id }, { $set: update });
     if (CLOSED_STATUSES.includes(String(update.status))) {
