@@ -52,6 +52,8 @@ function customerToDistributor(customer: Customer, unitsSold = 0): DistributorRe
     unitsSold,
     isActive: customer.status !== "Inactive",
     status: customer.status,
+    createdAt: customer.createdAt,
+    updatedAt: customer.updatedAt,
     stateRegion: customer.stateRegion,
     registrationCode: customer.registrationCode,
     dateOfRegistration: customer.dateOfRegistration,

@@ -60,6 +60,14 @@ const SERVICE_ROLE_BY_LEVEL = {
   L2: "L2 Technical Team",
   L3: "L3 Advanced OEM Support",
 } as const;
+const ASSIGNABLE_SERVICE_ENGINEER_EMAILS = new Set([
+  "l1.rohit@avavbusiness.com",
+  "l1.amit@avavbusiness.com",
+  "l2.vikas@avavbusiness.com",
+  "l2.sandeep@avavbusiness.com",
+  "l3.mahesh@avavbusiness.com",
+  "l3.deepak@avavbusiness.com",
+]);
 
 function normalizeText(value: unknown) {
   return String(value ?? "").trim();
@@ -150,7 +158,7 @@ async function serviceEngineers(level?: ServiceLevel) {
     ? [SERVICE_ROLE_BY_LEVEL[level]]
     : Object.values(SERVICE_ROLE_BY_LEVEL);
   const users = await c.users
-    .find({ role: { $in: roles }, isActive: { $ne: false } }, { projection: { id: 1, name: 1, email: 1, role: 1 } })
+    .find({ role: { $in: roles }, email: { $in: [...ASSIGNABLE_SERVICE_ENGINEER_EMAILS] }, isActive: { $ne: false } }, { projection: { id: 1, name: 1, email: 1, role: 1 } })
     .sort({ name: 1 })
     .toArray();
   return users.map((user) => ({ id: user.id, name: user.name, email: user.email, role: user.role }));
@@ -468,6 +476,8 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     trackingNotes,
     escalationLevel,
     l1Inspection,
+    serviceStartedAt,
+    progressUpdates,
     technicalDiagnosis,
     spareRequired,
     spareName,
@@ -481,6 +491,8 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     paymentVerificationStatus,
     replacementApprovalStatus,
     replacementRecommended,
+    replacementSeriesName,
+    replacementModelName,
     replacementProductName,
     replacementProductNo,
     replacementSerialNo,
@@ -493,6 +505,10 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     finalResolution,
     clientFeedback,
     closureReport,
+    closeRemark,
+    closedByName,
+    closedByRole,
+    closedAt,
   } = req.body;
 
   if (!type || !dateOfComplaint || !issueDescription) {
@@ -562,6 +578,8 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     escalationLevel,
     l1Inspection,
     l1InspectionValid,
+    serviceStartedAt: serviceStartedAt ? new Date(serviceStartedAt) : undefined,
+    progressUpdates,
     technicalDiagnosis,
     spareRequired,
     spareName,
@@ -575,6 +593,8 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     paymentVerificationStatus,
     replacementApprovalStatus,
     replacementRecommended,
+    replacementSeriesName,
+    replacementModelName,
     replacementProductName,
     replacementProductNo,
     replacementSerialNo,
@@ -587,6 +607,10 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     finalResolution,
     clientFeedback,
     closureReport,
+    closeRemark,
+    closedByName,
+    closedByRole,
+    closedAt: closedAt ? new Date(closedAt) : undefined,
     status: assignment?.status ?? "Open at Aurawatt",
     raisedBy: user.userId,
     createdAt: new Date(),
@@ -656,6 +680,8 @@ router.put(
       "trackingNotes",
       "escalationLevel",
       "l1Inspection",
+      "serviceStartedAt",
+      "progressUpdates",
       "technicalDiagnosis",
       "spareRequired",
       "spareName",
@@ -669,6 +695,8 @@ router.put(
       "paymentVerificationStatus",
       "replacementApprovalStatus",
       "replacementRecommended",
+      "replacementSeriesName",
+      "replacementModelName",
       "replacementProductName",
       "replacementProductNo",
       "replacementSerialNo",
@@ -681,6 +709,10 @@ router.put(
       "finalResolution",
       "clientFeedback",
       "closureReport",
+      "closeRemark",
+      "closedByName",
+      "closedByRole",
+      "closedAt",
       "status",
     ] as const;
 
@@ -688,6 +720,15 @@ router.put(
     for (const field of allowedFields) {
       if (field in req.body) update[field] = req.body[field];
     }
+    if ("serviceStartedAt" in req.body && req.body.serviceStartedAt) update.serviceStartedAt = new Date(req.body.serviceStartedAt);
+    if (Array.isArray(req.body.progressUpdates)) {
+      update.progressUpdates = req.body.progressUpdates.map((item: any) => ({
+        ...item,
+        date: item?.date ? new Date(item.date) : new Date(),
+        createdAt: item?.createdAt ? new Date(item.createdAt) : new Date(),
+      }));
+    }
+    if ("closedAt" in req.body && req.body.closedAt) update.closedAt = new Date(req.body.closedAt);
 
     if (req.body.forceAssign || req.body.reassignEngineerName) {
       const assignment = await buildAssignment({

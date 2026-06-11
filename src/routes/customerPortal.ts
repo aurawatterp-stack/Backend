@@ -23,11 +23,19 @@ function normalizePhone(value: unknown): string {
   return String(value ?? "").replace(/\D/g, "");
 }
 
-function phoneMatches(input: string, stored?: string): boolean {
-  const cleanInput = normalizePhone(input);
-  const cleanStored = normalizePhone(stored);
-  if (!cleanInput || !cleanStored) return true;
-  return cleanInput === cleanStored || cleanInput.endsWith(cleanStored) || cleanStored.endsWith(cleanInput);
+function mergePhones(...values: unknown[]): string[] {
+  const seen = new Set<string>();
+  const phones: string[] = [];
+  for (const value of values) {
+    const items = Array.isArray(value) ? value : [value];
+    for (const item of items) {
+      const phone = normalizePhone(item);
+      if (!phone || seen.has(phone)) continue;
+      seen.add(phone);
+      phones.push(phone);
+    }
+  }
+  return phones;
 }
 
 function derivePriority(issueDescription: string): Complaint["priority"] {
@@ -103,10 +111,6 @@ router.post("/login", async (req: Request, res: Response) => {
     ? await c.customers.findOne({ id: manufactured.customerId }, { projection: { id: 1, name: 1, phone: 1, email: 1 } })
     : null;
 
-  if (customer?.phone && mobile && !phoneMatches(mobile, customer.phone)) {
-    return fail(res, "Mobile number does not match this serial number", 401);
-  }
-
   return ok(res, {
     session: {
       serialNumber: manufactured.serialNumber,
@@ -149,24 +153,22 @@ router.post("/complaints", async (req: Request, res: Response) => {
     : null;
   const siteLocation = String(req.body.siteLocation ?? linkedCustomer?.address ?? "").trim();
 
-  if (linkedCustomer?.phone && mobile && !phoneMatches(mobile, linkedCustomer.phone)) {
-    return fail(res, "Mobile number does not match this serial number", 401);
-  }
-
   if (!linkedCustomer && (!customerName || !mobile)) {
     return fail(res, "Customer name and mobile number are required");
   }
 
   const now = new Date();
   const assignment = await assignPortalTicket(issueDescription, siteLocation);
+  const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured.customerPhones);
   const complaint: Complaint = {
     id: generateId(),
     type: "Consumer",
     productSerialNo: serialNumber,
     customerId: linkedCustomer?.id ?? manufactured.customerId,
-    customerName: linkedCustomer?.name ?? customerName,
-    customerPhone: linkedCustomer?.phone ?? mobile,
-    customerEmail: linkedCustomer?.email ?? (customerEmail || undefined),
+    customerName: customerName || linkedCustomer?.name,
+    customerPhone: mobile,
+    customerPhones,
+    customerEmail: customerEmail || linkedCustomer?.email,
     dateOfSale: manufactured.soldDate ? new Date(manufactured.soldDate) : undefined,
     dateOfComplaint: now,
     issueDescription,
@@ -198,6 +200,10 @@ router.post("/complaints", async (req: Request, res: Response) => {
   };
 
   await c.complaints.insertOne(complaint);
+  await c.manufactured.updateOne(
+    { serialNumber },
+    { $set: { customerPhones, updatedAt: now } }
+  );
 
   try {
     const notification: Notification = {

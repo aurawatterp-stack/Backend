@@ -197,6 +197,7 @@ export type ManufacturedProduct = {
     quantityUsed: number;
   }[];
   customerId?: string;
+  customerPhones?: string[];
   soldDate?: Date;
   returnReason?: string;
   createdAt: Date;
@@ -305,6 +306,15 @@ export type L1Inspection = {
   escalateToL2?: boolean;
 };
 
+export type ComplaintProgressUpdate = {
+  id: string;
+  date: Date;
+  note: string;
+  byName?: string;
+  byRole?: string;
+  createdAt: Date;
+};
+
 export type Complaint = {
   id: string;
   type: ComplaintType;
@@ -312,6 +322,7 @@ export type Complaint = {
   customerId?: string;
   customerName?: string;
   customerPhone?: string;
+  customerPhones?: string[];
   customerEmail?: string;
   rawMaterialId?: string;
   rawMaterialName?: string;
@@ -346,6 +357,8 @@ export type Complaint = {
   escalationLevel?: "L1" | "L2" | "L3";
   l1Inspection?: L1Inspection;
   l1InspectionValid?: boolean;
+  serviceStartedAt?: Date;
+  progressUpdates?: ComplaintProgressUpdate[];
   technicalDiagnosis?: string;
   spareRequired?: boolean;
   spareName?: string;
@@ -359,6 +372,8 @@ export type Complaint = {
   paymentVerificationStatus?: "Pending" | "Verified" | string;
   replacementApprovalStatus?: "Not Required" | "Pending Accounts" | "Approved" | "Rejected" | string;
   replacementRecommended?: boolean;
+  replacementSeriesName?: string;
+  replacementModelName?: string;
   replacementProductName?: string;
   replacementProductNo?: string;
   replacementSerialNo?: string;
@@ -371,6 +386,10 @@ export type Complaint = {
   finalResolution?: string;
   clientFeedback?: string;
   closureReport?: string;
+  closeRemark?: string;
+  closedByName?: string;
+  closedByRole?: string;
+  closedAt?: Date;
   status: ComplaintStatus;
   raisedBy: string;
   createdAt: Date;

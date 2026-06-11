@@ -59,6 +59,14 @@ const SERVICE_ROLE_BY_LEVEL = {
     L2: "L2 Technical Team",
     L3: "L3 Advanced OEM Support",
 };
+const ASSIGNABLE_SERVICE_ENGINEER_EMAILS = new Set([
+    "l1.rohit@avavbusiness.com",
+    "l1.amit@avavbusiness.com",
+    "l2.vikas@avavbusiness.com",
+    "l2.sandeep@avavbusiness.com",
+    "l3.mahesh@avavbusiness.com",
+    "l3.deepak@avavbusiness.com",
+]);
 function normalizeText(value) {
     return String(value ?? "").trim();
 }
@@ -150,7 +158,7 @@ async function serviceEngineers(level) {
         ? [SERVICE_ROLE_BY_LEVEL[level]]
         : Object.values(SERVICE_ROLE_BY_LEVEL);
     const users = await c.users
-        .find({ role: { $in: roles }, isActive: { $ne: false } }, { projection: { id: 1, name: 1, email: 1, role: 1 } })
+        .find({ role: { $in: roles }, email: { $in: [...ASSIGNABLE_SERVICE_ENGINEER_EMAILS] }, isActive: { $ne: false } }, { projection: { id: 1, name: 1, email: 1, role: 1 } })
         .sort({ name: 1 })
         .toArray();
     return users.map((user) => ({ id: user.id, name: user.name, email: user.email, role: user.role }));
@@ -393,7 +401,7 @@ router.get("/service-engineers", auth_1.authenticate, (0, auth_1.requireAnyPermi
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, } = req.body;
+    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
     if (!type || !dateOfComplaint || !issueDescription) {
         return (0, http_1.fail)(res, "type, dateOfComplaint, issueDescription are required");
     }
@@ -457,6 +465,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         escalationLevel,
         l1Inspection,
         l1InspectionValid,
+        serviceStartedAt: serviceStartedAt ? new Date(serviceStartedAt) : undefined,
+        progressUpdates,
         technicalDiagnosis,
         spareRequired,
         spareName,
@@ -470,6 +480,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         paymentVerificationStatus,
         replacementApprovalStatus,
         replacementRecommended,
+        replacementSeriesName,
+        replacementModelName,
         replacementProductName,
         replacementProductNo,
         replacementSerialNo,
@@ -482,6 +494,10 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         finalResolution,
         clientFeedback,
         closureReport,
+        closeRemark,
+        closedByName,
+        closedByRole,
+        closedAt: closedAt ? new Date(closedAt) : undefined,
         status: assignment?.status ?? "Open at Aurawatt",
         raisedBy: user.userId,
         createdAt: new Date(),
@@ -541,6 +557,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "trackingNotes",
         "escalationLevel",
         "l1Inspection",
+        "serviceStartedAt",
+        "progressUpdates",
         "technicalDiagnosis",
         "spareRequired",
         "spareName",
@@ -554,6 +572,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "paymentVerificationStatus",
         "replacementApprovalStatus",
         "replacementRecommended",
+        "replacementSeriesName",
+        "replacementModelName",
         "replacementProductName",
         "replacementProductNo",
         "replacementSerialNo",
@@ -566,6 +586,10 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "finalResolution",
         "clientFeedback",
         "closureReport",
+        "closeRemark",
+        "closedByName",
+        "closedByRole",
+        "closedAt",
         "status",
     ];
     const update = { updatedAt: new Date(), l1InspectionValid };
@@ -573,6 +597,17 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         if (field in req.body)
             update[field] = req.body[field];
     }
+    if ("serviceStartedAt" in req.body && req.body.serviceStartedAt)
+        update.serviceStartedAt = new Date(req.body.serviceStartedAt);
+    if (Array.isArray(req.body.progressUpdates)) {
+        update.progressUpdates = req.body.progressUpdates.map((item) => ({
+            ...item,
+            date: item?.date ? new Date(item.date) : new Date(),
+            createdAt: item?.createdAt ? new Date(item.createdAt) : new Date(),
+        }));
+    }
+    if ("closedAt" in req.body && req.body.closedAt)
+        update.closedAt = new Date(req.body.closedAt);
     if (req.body.forceAssign || req.body.reassignEngineerName) {
         const assignment = await buildAssignment({
             issueDescription: existing.issueDescription,
