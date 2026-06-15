@@ -334,10 +334,14 @@ export type Complaint = {
   l1Sla?: "2 Hours" | "4 Hours";
   dealerName?: string;
   siteLocation?: string;
+  state?: string;
+  district?: string;
   region?: string;
   priority?: ServicePriority;
   warrantyStatus?: "In Warranty" | "Out of Warranty" | "Unknown" | string;
   productModel?: string;
+  taxInvoiceNo?: string;
+  taxInvoiceDate?: Date;
   assignmentStatus?: "Assigned" | "Waiting";
   assignedEngineerId?: string;
   assignedEngineerName?: string;
@@ -381,6 +385,11 @@ export type Complaint = {
   replacementEngineerName?: string;
   dispatchPlan?: string;
   siteVisitRequired?: boolean;
+  siteVisitEngineerId?: string;
+  siteVisitScheduledDate?: Date;
+  siteVisitAssignedById?: string;
+  siteVisitAssignedByName?: string;
+  siteVisitAssignedByRole?: string;
   engineerName?: string;
   l3SupportRequired?: boolean;
   finalResolution?: string;

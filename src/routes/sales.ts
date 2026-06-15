@@ -351,7 +351,7 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
 
   const sale = await c.sales.findOne({ id });
   if (!sale) return fail(res, "PI record not found", 404);
-  if (!sale.piAttachmentUrl) return fail(res, "PI must be shared to Accounts before accounts documents can be uploaded");
+  if (!sale.referenceNo) return fail(res, "PI must be generated before payment verification");
 
   const user = (req as any).user as AuthUser;
   const update: Partial<Sale> = {};
@@ -362,16 +362,20 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
   if (paymentStatus !== undefined) update.paymentStatus = paymentStatus === "Confirmed" ? "Confirmed" : "Pending";
 
   if (
-    paymentStatus === "Confirmed" &&
+    (taxInvoiceAttachmentName !== undefined || taxInvoiceAttachmentUrl !== undefined || ewayBillAttachmentName !== undefined || ewayBillAttachmentUrl !== undefined) &&
     (
       (!update.taxInvoiceAttachmentName && !sale.taxInvoiceAttachmentName) ||
       (!update.ewayBillAttachmentName && !sale.ewayBillAttachmentName)
     )
   ) {
-    return fail(res, "Tax Invoice and E-Way Bill upload required before payment can be marked done");
+    return fail(res, "Tax Invoice and E-Way Bill upload required before accounts documents can be shared");
   }
 
-  if (update.paymentStatus === "Confirmed") {
+  if ((update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) && sale.dispatchStatus === "Planned") {
+    return fail(res, "Dispatch request must be generated before Tax Invoice and E-Way Bill upload");
+  }
+
+  if (update.paymentStatus === "Confirmed" || update.taxInvoiceAttachmentName || update.ewayBillAttachmentName) {
     update.accountsSharedAt = new Date();
     update.accountsSharedBy = user.userId;
   }
@@ -388,6 +392,9 @@ router.put("/:id/sales-dispatch", authenticate, requireAnyPermission("sales:entr
 
   const sale = await c.sales.findOne({ id });
   if (!sale) return fail(res, "PI record not found", 404);
+  if (dispatchStatus === "Ready" && sale.paymentStatus !== "Confirmed") {
+    return fail(res, "Payment must be verified before Sales Order and dispatch request");
+  }
 
   const update: Partial<Sale> = {};
   if (saleDate) update.saleDate = new Date(saleDate);
@@ -451,6 +458,9 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered";
   if (isDeliveryStatus && sale.paymentStatus !== "Confirmed") {
     return fail(res, "Payment must be confirmed by Accounts before delivery");
+  }
+  if (isDeliveryStatus && !update.serialNumber && !sale.serialNumber) {
+    return fail(res, "Serial allocation is required before material dispatch");
   }
   if (isDeliveryStatus && (!sale.taxInvoiceAttachmentName || !sale.ewayBillAttachmentName)) {
     return fail(res, "Tax Invoice and E-Way Bill are required before delivery");

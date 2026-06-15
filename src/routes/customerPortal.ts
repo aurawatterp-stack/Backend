@@ -1,12 +1,13 @@
 import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
-import type { Complaint, Notification } from "../types";
+import type { Complaint, Customer, ManufacturedProduct, Notification, Sale } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 
 const router: Router = express.Router();
 const MAX_ACTIVE_TICKETS_PER_ENGINEER = 5;
+const STANDARD_WARRANTY_MONTHS = 60;
 const PORTAL_SERVICE_REGIONS = [
   { name: "NCR", keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"], engineerId: "eng-ncr-l1", engineerName: "Rohit Sharma", backupEngineerName: "Amit Verma" },
   { name: "UP", keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"], engineerId: "eng-up-l1", engineerName: "Vikas Yadav", backupEngineerName: "Sandeep Singh" },
@@ -14,6 +15,36 @@ const PORTAL_SERVICE_REGIONS = [
   { name: "Punjab", keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"], engineerId: "eng-pb-l1", engineerName: "Harpreet Singh", backupEngineerName: "Gurpreet Gill" },
 ] as const;
 const PORTAL_ACTIVE_STATUSES = ["Assigned to Engineer", "In Progress at Aurawatt", "Escalated to L2", "Escalated to L3", "Spare Requested", "Dispatch in Progress"];
+const STATE_HINTS = [
+  { state: "Uttar Pradesh", aliases: ["uttar pradesh", " up ", "lucknow", "kanpur", "varanasi", "prayagraj", "ghaziabad", "noida", "saharanpur", "mathura", "mirzapur"] },
+  { state: "Delhi", aliases: ["delhi", "ncr"] },
+  { state: "Haryana", aliases: ["haryana", "gurgaon", "gurugram", "faridabad"] },
+  { state: "Rajasthan", aliases: ["rajasthan", "jaipur", "ajmer", "udaipur", "jodhpur"] },
+  { state: "Punjab", aliases: ["punjab", "ludhiana", "amritsar", "jalandhar", "patiala"] },
+  { state: "Bihar", aliases: ["bihar", "patna"] },
+] as const;
+const DISTRICT_HINTS = [
+  "Ghaziabad",
+  "Noida",
+  "Gurugram",
+  "Faridabad",
+  "Lucknow",
+  "Kanpur",
+  "Varanasi",
+  "Prayagraj",
+  "Jaipur",
+  "Ajmer",
+  "Udaipur",
+  "Jodhpur",
+  "Ludhiana",
+  "Amritsar",
+  "Jalandhar",
+  "Patiala",
+  "Saharanpur",
+  "Mathura",
+  "Mirzapur",
+  "Patna",
+] as const;
 
 function normalizeSerial(value: unknown): string {
   return String(value ?? "").trim();
@@ -49,6 +80,37 @@ function derivePriority(issueDescription: string): Complaint["priority"] {
 function mapPortalRegion(location?: string) {
   const text = String(location ?? "").trim().toLowerCase();
   return PORTAL_SERVICE_REGIONS.find((region) => region.name.toLowerCase() === text || region.keywords.some((keyword) => text.includes(keyword))) ?? PORTAL_SERVICE_REGIONS[0];
+}
+
+function normalizeForLookup(value: unknown) {
+  return ` ${String(value ?? "").trim().toLowerCase()} `;
+}
+
+function firstText(...values: unknown[]) {
+  return values.map((value) => String(value ?? "").trim()).find(Boolean);
+}
+
+function inferState(...values: unknown[]) {
+  const text = normalizeForLookup(values.filter(Boolean).join(" "));
+  return STATE_HINTS.find((entry) => entry.aliases.some((alias) => text.includes(alias)))?.state;
+}
+
+function inferDistrict(...values: unknown[]) {
+  const text = normalizeForLookup(values.filter(Boolean).join(" "));
+  return DISTRICT_HINTS.find((district) => text.includes(district.toLowerCase()));
+}
+
+function addMonths(date: Date, months: number) {
+  const next = new Date(date);
+  next.setMonth(next.getMonth() + months);
+  return next;
+}
+
+function calculateWarrantyStatus(soldDate?: Date | string) {
+  if (!soldDate) return "Unknown";
+  const parsed = new Date(soldDate);
+  if (!Number.isFinite(parsed.getTime())) return "Unknown";
+  return addMonths(parsed, STANDARD_WARRANTY_MONTHS).getTime() >= Date.now() ? "In Warranty" : "Out of Warranty";
 }
 
 async function assignPortalTicket(issueDescription: string, location?: string) {
@@ -93,6 +155,55 @@ async function findManufacturedBySerial(serialNumber: string) {
   return c.manufactured.findOne({ serialNumber });
 }
 
+async function findLatestSaleForSerial(serialNumber: string, manufactured?: ManufacturedProduct | null) {
+  const c = await getCollections();
+  const invoiceNo = manufactured?.invoiceNo ? String(manufactured.invoiceNo) : "";
+  const saleByInvoice = invoiceNo
+    ? await c.sales.findOne({ referenceNo: invoiceNo })
+    : null;
+  if (saleByInvoice) return saleByInvoice;
+
+  return c.sales.find({ serialNumber }).sort({ saleDate: -1 }).limit(1).next();
+}
+
+function invoiceAddressFor(sale?: Sale | null, customer?: Customer | null) {
+  return firstText(
+    sale?.unregisteredCustomerAddress,
+    customer?.deliveryAddress1,
+    customer?.deliveryAddress2,
+    customer?.deliveryAddress3,
+    customer?.billingAddress,
+    customer?.address
+  );
+}
+
+async function resolveInvoiceServiceDetails(serialNumber: string, manufactured: ManufacturedProduct) {
+  const c = await getCollections();
+  const sale = await findLatestSaleForSerial(serialNumber, manufactured);
+  const customerId = sale?.customerId ?? manufactured.customerId;
+  const customer = customerId ? await c.customers.findOne({ id: customerId }) : null;
+  const product = manufactured.productId ? await c.products.findOne({ id: manufactured.productId }) : null;
+  const invoiceAddress = invoiceAddressFor(sale, customer);
+  const regionSource = firstText(sale?.stateRegion, customer?.stateRegion, customer?.areaAllotted, invoiceAddress);
+  const state = inferState(sale?.stateRegion, customer?.stateRegion, invoiceAddress);
+  const district = inferDistrict(invoiceAddress, sale?.stateRegion, customer?.stateRegion);
+  const warrantyStatus = calculateWarrantyStatus(manufactured.soldDate ?? sale?.saleDate);
+
+  return {
+    taxInvoiceNo: sale?.referenceNo ?? manufactured.invoiceNo,
+    taxInvoiceDate: sale?.saleDate,
+    state,
+    district,
+    region: mapPortalRegion(regionSource).name,
+    dealerName: firstText(sale?.dealerName, customer?.name, sale?.unregisteredCustomerName, sale?.customerName),
+    warrantyStatus,
+    productModel: product?.model ?? manufactured.productId,
+    customer,
+    sale,
+    invoiceAddress,
+  };
+}
+
 /**
  * POST /api/customer-portal/login
  * Lightweight customer verification for QR/link support flow.
@@ -106,6 +217,7 @@ router.post("/login", async (req: Request, res: Response) => {
 
   const manufactured = await findManufacturedBySerial(serialNumber);
   if (!manufactured) return fail(res, "Serial number not found", 404);
+  const invoiceDetails = await resolveInvoiceServiceDetails(serialNumber, manufactured);
 
   const customer = manufactured.customerId
     ? await c.customers.findOne({ id: manufactured.customerId }, { projection: { id: 1, name: 1, phone: 1, email: 1 } })
@@ -117,6 +229,16 @@ router.post("/login", async (req: Request, res: Response) => {
       productId: manufactured.productId,
       soldDate: manufactured.soldDate,
       customerId: manufactured.customerId,
+    },
+    invoice: {
+      taxInvoiceNo: invoiceDetails.taxInvoiceNo,
+      taxInvoiceDate: invoiceDetails.taxInvoiceDate,
+      state: invoiceDetails.state,
+      district: invoiceDetails.district,
+      region: invoiceDetails.region,
+      dealerName: invoiceDetails.dealerName,
+      warrantyStatus: invoiceDetails.warrantyStatus,
+      productModel: invoiceDetails.productModel,
     },
     customer: customer
       ? {
@@ -147,18 +269,17 @@ router.post("/complaints", async (req: Request, res: Response) => {
 
   const manufactured = await findManufacturedBySerial(serialNumber);
   if (!manufactured) return fail(res, "Serial number not found", 404);
+  const invoiceDetails = await resolveInvoiceServiceDetails(serialNumber, manufactured);
 
-  const linkedCustomer = manufactured.customerId
-    ? await c.customers.findOne({ id: manufactured.customerId }, { projection: { id: 1, name: 1, phone: 1, email: 1, address: 1 } })
-    : null;
-  const siteLocation = String(req.body.siteLocation ?? linkedCustomer?.address ?? "").trim();
+  const linkedCustomer = invoiceDetails.customer;
+  const siteLocation = String(req.body.siteLocation ?? invoiceDetails.invoiceAddress ?? linkedCustomer?.address ?? "").trim();
 
   if (!linkedCustomer && (!customerName || !mobile)) {
     return fail(res, "Customer name and mobile number are required");
   }
 
   const now = new Date();
-  const assignment = await assignPortalTicket(issueDescription, siteLocation);
+  const assignment = await assignPortalTicket(issueDescription, invoiceDetails.region || siteLocation);
   const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured.customerPhones);
   const complaint: Complaint = {
     id: generateId(),
@@ -169,14 +290,25 @@ router.post("/complaints", async (req: Request, res: Response) => {
     customerPhone: mobile,
     customerPhones,
     customerEmail: customerEmail || linkedCustomer?.email,
-    dateOfSale: manufactured.soldDate ? new Date(manufactured.soldDate) : undefined,
+    dateOfSale: manufactured.soldDate
+      ? new Date(manufactured.soldDate)
+      : invoiceDetails.sale?.saleDate
+        ? new Date(invoiceDetails.sale.saleDate)
+        : undefined,
     dateOfComplaint: now,
     issueDescription,
     ticketSource: "Link",
     l1Sla: "4 Hours",
+    dealerName: invoiceDetails.dealerName,
     siteLocation: siteLocation || undefined,
+    state: invoiceDetails.state,
+    district: invoiceDetails.district,
     region: assignment.region,
     priority: assignment.priority,
+    warrantyStatus: invoiceDetails.warrantyStatus,
+    productModel: invoiceDetails.productModel,
+    taxInvoiceNo: invoiceDetails.taxInvoiceNo,
+    taxInvoiceDate: invoiceDetails.taxInvoiceDate ? new Date(invoiceDetails.taxInvoiceDate) : undefined,
     assignmentStatus: assignment.assignmentStatus,
     assignedEngineerId: assignment.assignedEngineerId,
     assignedEngineerName: assignment.assignedEngineerName,
@@ -220,9 +352,15 @@ router.post("/complaints", async (req: Request, res: Response) => {
         customerEmail: complaint.customerEmail,
         issueDescription: complaint.issueDescription,
         siteLocation: complaint.siteLocation,
+        state: complaint.state,
+        district: complaint.district,
+        region: complaint.region,
+        dealerName: complaint.dealerName,
+        warrantyStatus: complaint.warrantyStatus,
+        assignedEngineerName: complaint.assignedEngineerName,
         ticketSource: "Link",
       },
-      audienceRoles: ["Admin", "Sales"],
+      audienceRoles: ["Admin", "Sales", "L1 Engineer"],
       readBy: [],
       createdBy: "customer-portal",
       createdAt: now,
@@ -237,6 +375,9 @@ router.post("/complaints", async (req: Request, res: Response) => {
     status: complaint.status,
     productSerialNo: complaint.productSerialNo,
     dateOfComplaint: complaint.dateOfComplaint,
+    region: complaint.region,
+    assignedEngineerName: complaint.assignedEngineerName,
+    warrantyStatus: complaint.warrantyStatus,
   }, 201);
 });
 

@@ -311,6 +311,8 @@ function complaintRoleScope(user) {
             $or: [
                 { assignedEngineerId: user.userId },
                 ...(user.name ? [{ assignedEngineerName: user.name }] : []),
+                { siteVisitRequired: true, siteVisitEngineerId: user.userId },
+                ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
             ],
         };
@@ -339,6 +341,8 @@ function canAccessComplaint(user, complaint) {
     if (user.role === "L1 Engineer") {
         return (complaint.assignedEngineerId === user.userId ||
             (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
+            (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
+            (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.engineerName === user.name) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1"));
     }
     if (user.role === "L2 Technical Team") {
@@ -581,6 +585,11 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "replacementEngineerName",
         "dispatchPlan",
         "siteVisitRequired",
+        "siteVisitEngineerId",
+        "siteVisitScheduledDate",
+        "siteVisitAssignedById",
+        "siteVisitAssignedByName",
+        "siteVisitAssignedByRole",
         "engineerName",
         "l3SupportRequired",
         "finalResolution",
@@ -608,6 +617,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     }
     if ("closedAt" in req.body && req.body.closedAt)
         update.closedAt = new Date(req.body.closedAt);
+    if ("siteVisitScheduledDate" in req.body && req.body.siteVisitScheduledDate)
+        update.siteVisitScheduledDate = new Date(req.body.siteVisitScheduledDate);
     if (req.body.forceAssign || req.body.reassignEngineerName) {
         const assignment = await buildAssignment({
             issueDescription: existing.issueDescription,
@@ -683,29 +694,63 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     }
     await c.complaints.updateOne({ id }, { $set: update });
     if (CLOSED_STATUSES.includes(String(update.status))) {
-        await releaseNextWaitingTicket();
+        try {
+            await releaseNextWaitingTicket();
+        }
+        catch (err) {
+            console.warn("Failed to release next waiting ticket:", err instanceof Error ? err.message : String(err));
+        }
     }
     const updated = await c.complaints.findOne({ id });
     if (updated && req.body.notifyAdminOnCompletion && CLOSED_STATUSES.includes(String(update.status))) {
-        const notification = {
-            id: (0, id_1.generateId)(),
-            type: "complaint_completed",
-            title: "Complaint completed by service team",
-            body: `${updated.productSerialNo || "No serial"} resolved. ${updated.finalResolution || "Final resolution submitted."}`,
-            entityType: "complaint",
-            entityId: updated.id,
-            meta: {
-                serialNumber: updated.productSerialNo,
-                status: updated.status,
-                escalationLevel: updated.escalationLevel,
-                finalResolution: updated.finalResolution,
-            },
-            audienceRoles: ["Admin"],
-            readBy: [],
-            createdBy: user.userId,
-            createdAt: new Date(),
-        };
-        await c.notifications.insertOne(notification);
+        try {
+            const notification = {
+                id: (0, id_1.generateId)(),
+                type: "complaint_completed",
+                title: "Complaint completed by service team",
+                body: `${updated.productSerialNo || "No serial"} resolved. ${updated.finalResolution || "Final resolution submitted."}`,
+                entityType: "complaint",
+                entityId: updated.id,
+                meta: {
+                    serialNumber: updated.productSerialNo,
+                    status: updated.status,
+                    escalationLevel: updated.escalationLevel,
+                    finalResolution: updated.finalResolution,
+                },
+                audienceRoles: ["Admin"],
+                readBy: [],
+                createdBy: user.userId,
+                createdAt: new Date(),
+            };
+            await c.notifications.insertOne(notification);
+            if (updated.siteVisitRequired && updated.siteVisitAssignedById && updated.siteVisitAssignedById !== user.userId) {
+                const onsiteNotification = {
+                    id: (0, id_1.generateId)(),
+                    type: "complaint_completed",
+                    title: "Onsite ticket closed by engineer",
+                    body: `${updated.productSerialNo || "No serial"} onsite work closed by ${updated.closedByName || user.name || user.email}. ${updated.closeRemark || updated.finalResolution || "Work completed."}`,
+                    entityType: "complaint",
+                    entityId: updated.id,
+                    meta: {
+                        serialNumber: updated.productSerialNo,
+                        status: updated.status,
+                        closedByName: updated.closedByName,
+                        closedByRole: updated.closedByRole,
+                        closeRemark: updated.closeRemark,
+                        finalResolution: updated.finalResolution,
+                        siteVisitScheduledDate: updated.siteVisitScheduledDate,
+                    },
+                    audienceUserIds: [updated.siteVisitAssignedById],
+                    readBy: [],
+                    createdBy: user.userId,
+                    createdAt: new Date(),
+                };
+                await c.notifications.insertOne(onsiteNotification);
+            }
+        }
+        catch (err) {
+            console.warn("Failed to insert complaint completion notification:", err instanceof Error ? err.message : String(err));
+        }
     }
     return (0, http_1.ok)(res, updated);
 });
