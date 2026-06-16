@@ -1,14 +1,39 @@
-import express, { type Request, type Response, type Router } from "express";
+import express, { type NextFunction, type Request, type Response, type Router } from "express";
+import multer from "multer";
 
 import { getCollections } from "../db/collections";
 import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { AuthUser, Complaint, Notification } from "../types";
+import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 
 const router: Router = express.Router();
 const MAX_ACTIVE_L1_TICKETS = 5;
 const MAX_ACTIVE_SERVICE_TICKETS = 5;
+const MAX_INVERTER_PICTURE_BYTES = 5 * 1024 * 1024;
+
+const inverterPictureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_INVERTER_PICTURE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) return cb(null, true);
+    return cb(new multer.MulterError("LIMIT_UNEXPECTED_FILE", "picture"));
+  },
+});
+
+function runInverterPictureUpload(req: Request, res: Response, next: NextFunction) {
+  inverterPictureUpload.single("picture")(req, res, (err: unknown) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return fail(res, "Picture size must be 5 MB or less", 413);
+    }
+    if (err instanceof multer.MulterError && err.code === "LIMIT_UNEXPECTED_FILE") {
+      return fail(res, "Only image files are allowed", 400);
+    }
+    return next(err);
+  });
+}
 
 const SERVICE_REGIONS = [
   {
@@ -361,6 +386,8 @@ function complaintRoleScope(user: AuthUser): Record<string, unknown> | null {
       $or: [
         { assignedEngineerId: user.userId },
         ...(user.name ? [{ assignedEngineerName: user.name }] : []),
+        { siteVisitRequired: true, siteVisitEngineerId: user.userId },
+        ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
         { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
       ],
     };
@@ -393,6 +420,8 @@ function canAccessComplaint(user: AuthUser, complaint: Complaint): boolean {
     return (
       complaint.assignedEngineerId === user.userId ||
       (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
+      (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
+      (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.engineerName === user.name) ||
       (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2")
     );
   }
@@ -453,6 +482,39 @@ router.get("/service-engineers", authenticate, requireAnyPermission("complaints:
   return ok(res, engineers);
 });
 
+/** POST /api/complaints/upload-inverter-picture — upload onsite inverter picture to Cloudinary */
+router.post(
+  "/upload-inverter-picture",
+  authenticate,
+  requireAnyPermission("complaints:consumer", "complaints:supplier"),
+  runInverterPictureUpload,
+  async (req: Request, res: Response) => {
+    const file = req.file;
+    if (!file) return fail(res, "Inverter picture is required");
+
+    try {
+      const uploaded = await uploadBufferToCloudinary(file, "aurawatt/complaint-inverter-pictures");
+      if (!uploaded.url) return fail(res, "Cloudinary did not return a file URL", 502);
+      return ok(
+        res,
+        {
+          fileName: file.originalname,
+          fileType: file.mimetype || undefined,
+          fileSize: file.size,
+          url: uploaded.url,
+          publicId: uploaded.publicId,
+          resourceType: uploaded.resourceType,
+          format: uploaded.format,
+          uploadedAt: new Date(),
+        },
+        201
+      );
+    } catch (err) {
+      return fail(res, err instanceof Error ? err.message : "Failed to upload inverter picture", 502);
+    }
+  }
+);
+
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", authenticate, requireAnyPermission("complaints:consumer", "complaints:supplier"), async (req: Request, res: Response) => {
   const c = await getCollections();
@@ -480,6 +542,7 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     trackingNotes,
     escalationLevel,
     l1Inspection,
+    onsiteInspection,
     serviceStartedAt,
     progressUpdates,
     technicalDiagnosis,
@@ -582,6 +645,7 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     escalationLevel,
     l1Inspection,
     l1InspectionValid,
+    onsiteInspection,
     serviceStartedAt: serviceStartedAt ? new Date(serviceStartedAt) : undefined,
     progressUpdates,
     technicalDiagnosis,
@@ -684,6 +748,7 @@ router.put(
       "trackingNotes",
       "escalationLevel",
       "l1Inspection",
+      "onsiteInspection",
       "serviceStartedAt",
       "progressUpdates",
       "technicalDiagnosis",

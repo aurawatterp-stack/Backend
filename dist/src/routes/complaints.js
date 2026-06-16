@@ -4,13 +4,38 @@ var __importDefault = (this && this.__importDefault) || function (mod) {
 };
 Object.defineProperty(exports, "__esModule", { value: true });
 const express_1 = __importDefault(require("express"));
+const multer_1 = __importDefault(require("multer"));
 const collections_1 = require("../db/collections");
 const auth_1 = require("../middleware/auth");
+const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 const MAX_ACTIVE_L1_TICKETS = 5;
 const MAX_ACTIVE_SERVICE_TICKETS = 5;
+const MAX_INVERTER_PICTURE_BYTES = 5 * 1024 * 1024;
+const inverterPictureUpload = (0, multer_1.default)({
+    storage: multer_1.default.memoryStorage(),
+    limits: { fileSize: MAX_INVERTER_PICTURE_BYTES },
+    fileFilter: (_req, file, cb) => {
+        if (file.mimetype.startsWith("image/"))
+            return cb(null, true);
+        return cb(new multer_1.default.MulterError("LIMIT_UNEXPECTED_FILE", "picture"));
+    },
+});
+function runInverterPictureUpload(req, res, next) {
+    inverterPictureUpload.single("picture")(req, res, (err) => {
+        if (!err)
+            return next();
+        if (err instanceof multer_1.default.MulterError && err.code === "LIMIT_FILE_SIZE") {
+            return (0, http_1.fail)(res, "Picture size must be 5 MB or less", 413);
+        }
+        if (err instanceof multer_1.default.MulterError && err.code === "LIMIT_UNEXPECTED_FILE") {
+            return (0, http_1.fail)(res, "Only image files are allowed", 400);
+        }
+        return next(err);
+    });
+}
 const SERVICE_REGIONS = [
     {
         name: "NCR",
@@ -322,6 +347,8 @@ function complaintRoleScope(user) {
             $or: [
                 { assignedEngineerId: user.userId },
                 ...(user.name ? [{ assignedEngineerName: user.name }] : []),
+                { siteVisitRequired: true, siteVisitEngineerId: user.userId },
+                ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
             ],
         };
@@ -348,6 +375,8 @@ function canAccessComplaint(user, complaint) {
     if (user.role === "L2 Technical Team") {
         return (complaint.assignedEngineerId === user.userId ||
             (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
+            (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
+            (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.engineerName === user.name) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2"));
     }
     if (user.role === "L3 Advanced OEM Support") {
@@ -402,10 +431,34 @@ router.get("/service-engineers", auth_1.authenticate, (0, auth_1.requireAnyPermi
     const engineers = await serviceEngineers();
     return (0, http_1.ok)(res, engineers);
 });
+/** POST /api/complaints/upload-inverter-picture — upload onsite inverter picture to Cloudinary */
+router.post("/upload-inverter-picture", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), runInverterPictureUpload, async (req, res) => {
+    const file = req.file;
+    if (!file)
+        return (0, http_1.fail)(res, "Inverter picture is required");
+    try {
+        const uploaded = await (0, cloudinary_1.uploadBufferToCloudinary)(file, "aurawatt/complaint-inverter-pictures");
+        if (!uploaded.url)
+            return (0, http_1.fail)(res, "Cloudinary did not return a file URL", 502);
+        return (0, http_1.ok)(res, {
+            fileName: file.originalname,
+            fileType: file.mimetype || undefined,
+            fileSize: file.size,
+            url: uploaded.url,
+            publicId: uploaded.publicId,
+            resourceType: uploaded.resourceType,
+            format: uploaded.format,
+            uploadedAt: new Date(),
+        }, 201);
+    }
+    catch (err) {
+        return (0, http_1.fail)(res, err instanceof Error ? err.message : "Failed to upload inverter picture", 502);
+    }
+});
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
+    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
     if (!type || !dateOfComplaint || !issueDescription) {
         return (0, http_1.fail)(res, "type, dateOfComplaint, issueDescription are required");
     }
@@ -469,6 +522,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         escalationLevel,
         l1Inspection,
         l1InspectionValid,
+        onsiteInspection,
         serviceStartedAt: serviceStartedAt ? new Date(serviceStartedAt) : undefined,
         progressUpdates,
         technicalDiagnosis,
@@ -561,6 +615,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "trackingNotes",
         "escalationLevel",
         "l1Inspection",
+        "onsiteInspection",
         "serviceStartedAt",
         "progressUpdates",
         "technicalDiagnosis",

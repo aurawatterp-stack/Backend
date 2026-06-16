@@ -31,7 +31,7 @@ router.get("/series", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inv
 /** POST /api/products */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:products"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { series, model, description, hsnSac, gstRate, dealerPrice, distributorPrice } = req.body;
+    const { series, model, description, productDescription, modelDescription, hsnSac, gstRate, dealerPrice, distributorPrice } = req.body;
     if (!series || !model)
         return (0, http_1.fail)(res, "series and model are required");
     const exists = await c.products.findOne({ model }, { projection: { id: 1 } });
@@ -42,6 +42,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
         series,
         model,
         description,
+        productDescription: productDescription ? String(productDescription) : undefined,
+        modelDescription: modelDescription ? String(modelDescription) : undefined,
         hsnSac: hsnSac ? String(hsnSac) : undefined,
         gstRate: gstRate !== undefined && gstRate !== null && gstRate !== "" ? Number(gstRate) : undefined,
         dealerPrice: dealerPrice !== undefined && dealerPrice !== null && dealerPrice !== "" ? Number(dealerPrice) : undefined,
@@ -65,6 +67,10 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("invent
         update.model = String(req.body.model);
     if (req.body.description !== undefined)
         update.description = req.body.description ? String(req.body.description) : undefined;
+    if (req.body.productDescription !== undefined)
+        update.productDescription = req.body.productDescription ? String(req.body.productDescription) : undefined;
+    if (req.body.modelDescription !== undefined)
+        update.modelDescription = req.body.modelDescription ? String(req.body.modelDescription) : undefined;
     if (req.body.hsnSac !== undefined)
         update.hsnSac = req.body.hsnSac ? String(req.body.hsnSac) : undefined;
     if (req.body.gstRate !== undefined)

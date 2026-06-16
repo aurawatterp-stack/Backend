@@ -122,6 +122,17 @@ export type CustomerDocument = {
   format?: string;
   uploadedAt: Date;
 };
+
+export type InspectionAttachment = {
+  fileName: string;
+  fileType?: string;
+  fileSize?: number;
+  url: string;
+  publicId?: string;
+  resourceType?: string;
+  format?: string;
+  uploadedAt: Date;
+};
 export type Customer = {
   id: string;
   name: string;
@@ -155,6 +166,8 @@ export type Product = {
   series: string;
   model: string;
   description?: string;
+  productDescription?: string;
+  modelDescription?: string;
   hsnSac?: string;
   gstRate?: number;
   dealerPrice?: number;
@@ -306,6 +319,21 @@ export type L1Inspection = {
   siteVisitRequiredSuspected?: boolean;
   spareSuspected?: boolean;
   escalateToL2?: boolean;
+  inverterPictures?: InspectionAttachment[];
+};
+
+export type OnsiteInspection = {
+  inverterModel?: string;
+  serialNumber?: string;
+  errorCode?: string;
+  eTotalKwh?: number;
+  physicalChecks?: Record<string, boolean>;
+  acReadings?: Record<string, number | undefined>;
+  dcReadings?: Record<string, number | undefined>;
+  batteryReadings?: Record<string, number | boolean | undefined>;
+  systemStatus?: Record<string, boolean>;
+  observationNotes?: string;
+  inverterPictures?: InspectionAttachment[];
 };
 
 export type ComplaintProgressUpdate = {
@@ -363,6 +391,7 @@ export type Complaint = {
   escalationLevel?: "L1" | "L2" | "L3";
   l1Inspection?: L1Inspection;
   l1InspectionValid?: boolean;
+  onsiteInspection?: OnsiteInspection;
   serviceStartedAt?: Date;
   progressUpdates?: ComplaintProgressUpdate[];
   technicalDiagnosis?: string;
