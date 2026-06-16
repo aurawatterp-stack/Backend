@@ -656,13 +656,18 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "closedAt",
         "status",
     ];
-    const update = { updatedAt: new Date(), l1InspectionValid };
+    const serverNow = new Date();
+    const update = { updatedAt: serverNow, l1InspectionValid };
     for (const field of allowedFields) {
         if (field in req.body)
             update[field] = req.body[field];
     }
-    if ("serviceStartedAt" in req.body && req.body.serviceStartedAt)
-        update.serviceStartedAt = new Date(req.body.serviceStartedAt);
+    if ((req.body.status === "In Progress at Aurawatt" || ("serviceStartedAt" in req.body && req.body.serviceStartedAt)) && !existing.serviceStartedAt) {
+        update.serviceStartedAt = serverNow;
+    }
+    else {
+        delete update.serviceStartedAt;
+    }
     if (Array.isArray(req.body.progressUpdates)) {
         update.progressUpdates = req.body.progressUpdates.map((item) => ({
             ...item,
@@ -670,8 +675,12 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             createdAt: item?.createdAt ? new Date(item.createdAt) : new Date(),
         }));
     }
-    if ("closedAt" in req.body && req.body.closedAt)
-        update.closedAt = new Date(req.body.closedAt);
+    if (CLOSED_STATUSES.includes(String(req.body.status))) {
+        update.closedAt = serverNow;
+    }
+    else {
+        delete update.closedAt;
+    }
     if ("siteVisitScheduledDate" in req.body && req.body.siteVisitScheduledDate)
         update.siteVisitScheduledDate = new Date(req.body.siteVisitScheduledDate);
     if (req.body.forceAssign || req.body.reassignEngineerName) {
