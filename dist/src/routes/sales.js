@@ -88,13 +88,16 @@ function runPiUpload(req, res, next) {
 /** GET /api/sales */
 router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry", "dispatch:manage", "accounts:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { page = "1", limit = "20" } = req.query;
+    const { page = "1", limit = "20", sort = "" } = req.query;
     const p = Math.max(1, parseInt(page));
     const l = Math.min(100, parseInt(limit));
+    const sortSpec = sort === "accountsQueue"
+        ? { accountsRequestAt: -1, createdAt: -1, saleDate: -1 }
+        : { saleDate: -1 };
     const total = await c.sales.countDocuments({});
     const data = await c.sales
         .find({})
-        .sort({ saleDate: -1 })
+        .sort(sortSpec)
         .skip((p - 1) * l)
         .limit(l)
         .toArray();
@@ -331,7 +334,10 @@ router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission
     if ((update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) && sale.dispatchStatus === "Planned") {
         return (0, http_1.fail)(res, "Dispatch request must be generated before Tax Invoice and E-Way Bill upload");
     }
-    if (update.paymentStatus === "Confirmed" || update.taxInvoiceAttachmentName || update.ewayBillAttachmentName) {
+    if ((update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) && !sale.accountsRequestAt) {
+        return (0, http_1.fail)(res, "Sales dispatch request must be generated before sharing with Dispatch Team");
+    }
+    if (update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) {
         update.accountsSharedAt = new Date();
         update.accountsSharedBy = user.userId;
     }
@@ -343,6 +349,7 @@ router.put("/:id/sales-dispatch", auth_1.authenticate, (0, auth_1.requireAnyPerm
     const c = await (0, collections_1.getCollections)();
     const { id } = req.params;
     const { saleDate, piAttachmentName, piAttachmentUrl, expectedDispatchDate, confirmedDispatchDate, dispatchStatus } = req.body;
+    const user = req.user;
     const sale = await c.sales.findOne({ id });
     if (!sale)
         return (0, http_1.fail)(res, "PI record not found", 404);
@@ -362,9 +369,17 @@ router.put("/:id/sales-dispatch", auth_1.authenticate, (0, auth_1.requireAnyPerm
         update.confirmedDispatchDate = new Date(confirmedDispatchDate);
     if (dispatchStatus !== undefined)
         update.dispatchStatus = dispatchStatus;
-    if (!update.saleDate && !update.piAttachmentName && !update.expectedDispatchDate && !update.confirmedDispatchDate) {
+    const hasSalesDispatchUpdate = Boolean(saleDate) ||
+        piAttachmentName !== undefined ||
+        piAttachmentUrl !== undefined ||
+        Boolean(expectedDispatchDate) ||
+        Boolean(confirmedDispatchDate) ||
+        dispatchStatus !== undefined;
+    if (!hasSalesDispatchUpdate) {
         return (0, http_1.fail)(res, "PI attachment or dispatch date is required");
     }
+    update.accountsRequestAt = new Date();
+    update.accountsRequestBy = user.userId;
     await c.sales.updateOne({ id }, { $set: update });
     const updated = await c.sales.findOne({ id });
     return (0, http_1.ok)(res, updated);

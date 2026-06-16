@@ -261,6 +261,8 @@ export type Sale = {
   taxInvoiceAttachmentUrl?: string;
   ewayBillAttachmentName?: string;
   ewayBillAttachmentUrl?: string;
+  accountsRequestAt?: Date;
+  accountsRequestBy?: string;
   accountsSharedAt?: Date;
   accountsSharedBy?: string;
   paymentStatus?: "Pending" | "Confirmed";
