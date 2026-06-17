@@ -279,6 +279,32 @@ export type Sale = {
   accountsSharedAt?: Date;
   accountsSharedBy?: string;
   paymentStatus?: "Pending" | "Confirmed";
+  paymentVerifiedAt?: Date;
+  paymentVerifiedBy?: string;
+  dispatchReadyAt?: Date;
+  dispatchReadyBy?: string;
+  finalDispatchAt?: Date;
+  finalDispatchBy?: string;
+  piWorkflowVersion?: "payment-dispatch-v2" | string;
+  piWorkflowStatus?:
+    | "PI Submitted - Pending Payment Verification"
+    | "Payment Verified - Pending Dispatch Preparation"
+    | "Dispatch Ready - Pending Invoice & E-Way Bill"
+    | "Ready for Final Dispatch"
+    | "Dispatched"
+    | string;
+  piWorkflowHistory?: {
+    id: string;
+    action: string;
+    fromStatus?: string;
+    toStatus: string;
+    department: "Sales" | "Accounts" | "Dispatch" | string;
+    by: string;
+    byName?: string;
+    byRole?: string;
+    at: Date;
+    note?: string;
+  }[];
   createdBy: string;
   createdAt: Date;
 };

@@ -36,6 +36,12 @@ function parsePiItems(value: unknown): Sale["piItems"] {
 }
 
 type SalesCollections = Awaited<ReturnType<typeof getCollections>>;
+const PI_WORKFLOW_VERSION = "payment-dispatch-v2";
+const PI_STATUS_SUBMITTED = "PI Submitted - Pending Payment Verification";
+const PI_STATUS_PAYMENT_VERIFIED = "Payment Verified - Pending Dispatch Preparation";
+const PI_STATUS_DISPATCH_READY = "Dispatch Ready - Pending Invoice & E-Way Bill";
+const PI_STATUS_READY_FOR_FINAL_DISPATCH = "Ready for Final Dispatch";
+const PI_STATUS_DISPATCHED = "Dispatched";
 
 function piYearFromDate(value: unknown) {
   const parsed = value ? new Date(String(value)) : new Date();
@@ -72,6 +78,32 @@ async function resolveUniquePiNumber(c: SalesCollections, value: unknown, saleDa
     throw new Error("This PI number already exists. Please generate a new PI number.");
   }
   return referenceNo;
+}
+
+function isNewPiWorkflow(sale: Sale) {
+  return sale.piWorkflowVersion === PI_WORKFLOW_VERSION;
+}
+
+function workflowEvent(
+  sale: Sale,
+  user: AuthUser,
+  action: string,
+  toStatus: string,
+  department: "Sales" | "Accounts" | "Dispatch",
+  note?: string
+): NonNullable<Sale["piWorkflowHistory"]>[number] {
+  return {
+    id: generateId(),
+    action,
+    fromStatus: sale.piWorkflowStatus,
+    toStatus,
+    department,
+    by: user.userId,
+    byName: user.name,
+    byRole: user.role,
+    at: new Date(),
+    note,
+  };
 }
 
 function runDispatchDocketUpload(req: Request, res: Response, next: NextFunction) {
@@ -358,6 +390,30 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
 
   const user = (req as any).user as AuthUser;
   const update: Partial<Sale> = {};
+  const hasDocumentUpload =
+    taxInvoiceAttachmentName !== undefined ||
+    taxInvoiceAttachmentUrl !== undefined ||
+    ewayBillAttachmentName !== undefined ||
+    ewayBillAttachmentUrl !== undefined;
+  const wantsPaymentVerification = paymentStatus === "Confirmed";
+
+  if (isNewPiWorkflow(sale)) {
+    if (hasDocumentUpload) {
+      if (sale.paymentStatus !== "Confirmed") {
+        return fail(res, "Accounts cannot upload Tax Invoice or E-Way Bill before payment verification");
+      }
+      if (sale.piWorkflowStatus !== PI_STATUS_DISPATCH_READY) {
+        return fail(res, "Accounts can upload Tax Invoice and E-Way Bill only after Dispatch Ready status");
+      }
+    } else if (wantsPaymentVerification) {
+      if (sale.piWorkflowStatus !== PI_STATUS_SUBMITTED) {
+        return fail(res, "Payment verification can only be completed from the Accounts payment queue");
+      }
+    } else {
+      return fail(res, "Use Mark as Payment Verified, or upload Tax Invoice and E-Way Bill after Dispatch Ready");
+    }
+  }
+
   if (taxInvoiceAttachmentName !== undefined) update.taxInvoiceAttachmentName = String(taxInvoiceAttachmentName);
   if (taxInvoiceAttachmentUrl !== undefined) update.taxInvoiceAttachmentUrl = String(taxInvoiceAttachmentUrl);
   if (ewayBillAttachmentName !== undefined) update.ewayBillAttachmentName = String(ewayBillAttachmentName);
@@ -374,19 +430,60 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
     return fail(res, "Tax Invoice and E-Way Bill upload required before accounts documents can be shared");
   }
 
-  if ((update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) && sale.dispatchStatus === "Planned") {
+  if (
+    isNewPiWorkflow(sale) &&
+    hasDocumentUpload &&
+    (
+      !(update.taxInvoiceAttachmentName || sale.taxInvoiceAttachmentName) ||
+      !(update.taxInvoiceAttachmentUrl || sale.taxInvoiceAttachmentUrl) ||
+      !(update.ewayBillAttachmentName || sale.ewayBillAttachmentName) ||
+      !(update.ewayBillAttachmentUrl || sale.ewayBillAttachmentUrl)
+    )
+  ) {
+    return fail(res, "Tax Invoice and E-Way Bill files are both required before final dispatch");
+  }
+
+  if (!isNewPiWorkflow(sale) && (update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) && sale.dispatchStatus === "Planned") {
     return fail(res, "Dispatch request must be generated before Tax Invoice and E-Way Bill upload");
   }
-  if ((update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) && !sale.accountsRequestAt) {
+  if (!isNewPiWorkflow(sale) && (update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) && !sale.accountsRequestAt) {
     return fail(res, "Sales dispatch request must be generated before sharing with Dispatch Team");
+  }
+
+  let event: ReturnType<typeof workflowEvent> | undefined;
+  if (isNewPiWorkflow(sale) && wantsPaymentVerification && !hasDocumentUpload) {
+    update.paymentStatus = "Confirmed";
+    update.paymentVerifiedAt = new Date();
+    update.paymentVerifiedBy = user.userId;
+    update.piWorkflowStatus = PI_STATUS_PAYMENT_VERIFIED;
+    event = workflowEvent(
+      sale,
+      user,
+      "Mark as Payment Verified",
+      PI_STATUS_PAYMENT_VERIFIED,
+      "Accounts",
+      "Payment verified and request moved to Dispatch Team"
+    );
   }
 
   if (update.taxInvoiceAttachmentName || update.taxInvoiceAttachmentUrl || update.ewayBillAttachmentName || update.ewayBillAttachmentUrl) {
     update.accountsSharedAt = new Date();
     update.accountsSharedBy = user.userId;
   }
+  if (isNewPiWorkflow(sale) && hasDocumentUpload) {
+    update.paymentStatus = "Confirmed";
+    update.piWorkflowStatus = PI_STATUS_READY_FOR_FINAL_DISPATCH;
+    event = workflowEvent(
+      sale,
+      user,
+      "Upload Tax Invoice and E-Way Bill",
+      PI_STATUS_READY_FOR_FINAL_DISPATCH,
+      "Accounts",
+      "Accounts documents uploaded and request moved to Dispatch Team"
+    );
+  }
 
-  await c.sales.updateOne({ id }, { $set: update });
+  await c.sales.updateOne({ id }, event ? { $set: update, $push: { piWorkflowHistory: event } } : { $set: update });
   const updated = await c.sales.findOne({ id });
   return ok(res, updated);
 });
@@ -399,6 +496,9 @@ router.put("/:id/sales-dispatch", authenticate, requireAnyPermission("sales:entr
 
   const sale = await c.sales.findOne({ id });
   if (!sale) return fail(res, "PI record not found", 404);
+  if (isNewPiWorkflow(sale) && dispatchStatus !== undefined) {
+    return fail(res, "Dispatch status for new PI workflow is controlled by Accounts and Dispatch Team actions");
+  }
   if (dispatchStatus === "Ready" && sale.paymentStatus !== "Confirmed") {
     return fail(res, "Payment must be verified before Sales Order and dispatch request");
   }
@@ -444,6 +544,29 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
 
   const sale = await c.sales.findOne({ id });
   if (!sale) return fail(res, "PI record not found", 404);
+  const user = (req as any).user as AuthUser;
+  const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered";
+
+  if (isNewPiWorkflow(sale)) {
+    if (sale.paymentStatus !== "Confirmed") {
+      return fail(res, "Payment must be verified by Accounts before Dispatch Team can prepare this PI");
+    }
+    if (dispatchStatus === "Ready" && sale.piWorkflowStatus !== PI_STATUS_PAYMENT_VERIFIED) {
+      return fail(res, "Dispatch Ready can only be marked after Accounts verifies payment");
+    }
+    if (isDeliveryStatus && sale.piWorkflowStatus !== PI_STATUS_READY_FOR_FINAL_DISPATCH) {
+      return fail(res, "Final dispatch can happen only after Accounts uploads Tax Invoice and E-Way Bill");
+    }
+    if (
+      isDeliveryStatus &&
+      (!sale.taxInvoiceAttachmentName || !sale.taxInvoiceAttachmentUrl || !sale.ewayBillAttachmentName || !sale.ewayBillAttachmentUrl)
+    ) {
+      return fail(res, "Tax Invoice and E-Way Bill are required before final dispatch");
+    }
+    if (dispatchStatus !== undefined && dispatchStatus !== "Ready" && !isDeliveryStatus) {
+      return fail(res, "New PI workflow supports only Dispatch Ready or Final Dispatch actions from Dispatch Team");
+    }
+  }
 
   const update: Partial<Sale> = {};
   if (serialNumber) {
@@ -472,7 +595,6 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   if (courierDocketAttachmentName !== undefined) update.courierDocketAttachmentName = String(courierDocketAttachmentName);
   if (courierDocketAttachmentUrl !== undefined) update.courierDocketAttachmentUrl = String(courierDocketAttachmentUrl);
 
-  const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered";
   if (isDeliveryStatus && sale.paymentStatus !== "Confirmed") {
     return fail(res, "Payment must be confirmed by Accounts before delivery");
   }
@@ -495,9 +617,32 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     return fail(res, "Courier docket no. or docket attachment is required for delivery");
   }
 
+  let event: ReturnType<typeof workflowEvent> | undefined;
+  if (isNewPiWorkflow(sale) && dispatchStatus === "Ready") {
+    update.dispatchStatus = "Ready";
+    update.piWorkflowStatus = PI_STATUS_DISPATCH_READY;
+    update.dispatchReadyAt = new Date();
+    update.dispatchReadyBy = user.userId;
+    event = workflowEvent(
+      sale,
+      user,
+      "Mark Dispatch Ready",
+      PI_STATUS_DISPATCH_READY,
+      "Dispatch",
+      "Material prepared and request returned to Accounts Team for documents"
+    );
+  }
+  if (isNewPiWorkflow(sale) && isDeliveryStatus) {
+    update.dispatchStatus = "Delivered";
+    update.piWorkflowStatus = PI_STATUS_DISPATCHED;
+    update.finalDispatchAt = new Date();
+    update.finalDispatchBy = user.userId;
+    event = workflowEvent(sale, user, "Final Dispatch", PI_STATUS_DISPATCHED, "Dispatch", "Final dispatch completed");
+  }
+
   if (Object.keys(update).length === 0) return fail(res, "No dispatch updates provided");
 
-  await c.sales.updateOne({ id }, { $set: update });
+  await c.sales.updateOne({ id }, event ? { $set: update, $push: { piWorkflowHistory: event } } : { $set: update });
   const updated = await c.sales.findOne({ id });
   return ok(res, updated);
 });
@@ -617,6 +762,27 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
     createdBy: user.userId,
     createdAt: new Date(),
   };
+  if (isWorkflowEntry) {
+    sale.paymentStatus = "Pending";
+    sale.dispatchStatus = "Planned";
+    sale.piWorkflowVersion = PI_WORKFLOW_VERSION;
+    sale.piWorkflowStatus = PI_STATUS_SUBMITTED;
+    sale.accountsRequestAt = sale.createdAt;
+    sale.accountsRequestBy = user.userId;
+    sale.piWorkflowHistory = [
+      {
+        id: generateId(),
+        action: "Submit PI Request",
+        toStatus: PI_STATUS_SUBMITTED,
+        department: "Sales",
+        by: user.userId,
+        byName: user.name,
+        byRole: user.role,
+        at: sale.createdAt,
+        note: "PI request submitted to Accounts Team for payment verification",
+      },
+    ];
+  }
   if (serialNumber) sale.serialNumber = String(serialNumber);
   if (unregisteredCustomerName) sale.unregisteredCustomerName = String(unregisteredCustomerName);
   if (unregisteredCustomerAddress) sale.unregisteredCustomerAddress = String(unregisteredCustomerAddress);
@@ -654,11 +820,11 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
   if (piAttachmentUrl) sale.piAttachmentUrl = String(piAttachmentUrl);
   if (expectedDispatchDate) sale.expectedDispatchDate = new Date(expectedDispatchDate);
   if (confirmedDispatchDate) sale.confirmedDispatchDate = new Date(confirmedDispatchDate);
-  if (dispatchStatus) sale.dispatchStatus = dispatchStatus;
+  if (dispatchStatus && !isWorkflowEntry) sale.dispatchStatus = dispatchStatus;
   if (courierDocketNo) sale.courierDocketNo = String(courierDocketNo);
   if (courierDocketAttachmentName) sale.courierDocketAttachmentName = String(courierDocketAttachmentName);
   if (courierDocketAttachmentUrl) sale.courierDocketAttachmentUrl = String(courierDocketAttachmentUrl);
-  if (paymentStatus) sale.paymentStatus = paymentStatus;
+  if (paymentStatus && !isWorkflowEntry) sale.paymentStatus = paymentStatus;
   await c.sales.insertOne(sale);
 
   // Best-effort notification (never fail the main operation).
@@ -688,7 +854,7 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
         courierDocketAttachmentName,
         courierDocketAttachmentUrl,
       },
-      audienceRoles: ["Admin", "Sales", "Inventory"],
+      audienceRoles: isWorkflowEntry ? ["Admin", "Accounts", "Accounts Team"] : ["Admin", "Sales", "Inventory"],
       readBy: [],
       createdBy: user.userId,
       createdAt: new Date(),
