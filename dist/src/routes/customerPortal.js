@@ -11,10 +11,15 @@ const router = express_1.default.Router();
 const MAX_ACTIVE_TICKETS_PER_ENGINEER = 5;
 const STANDARD_WARRANTY_MONTHS = 60;
 const PORTAL_SERVICE_REGIONS = [
-    { name: "NCR", keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"], engineerId: "eng-ncr-l1", engineerName: "Rohit Sharma", backupEngineerName: "Amit Verma" },
-    { name: "UP", keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"], engineerId: "eng-up-l1", engineerName: "Vikas Yadav", backupEngineerName: "Sandeep Singh" },
-    { name: "Rajasthan", keywords: ["jaipur", "ajmer", "rajasthan", "udaipur", "jodhpur"], engineerId: "eng-rj-l1", engineerName: "Mahesh Choudhary", backupEngineerName: "Deepak Meena" },
-    { name: "Punjab", keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"], engineerId: "eng-pb-l1", engineerName: "Harpreet Singh", backupEngineerName: "Gurpreet Gill" },
+    { name: "NCR", keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"], engineerEmail: "l1.rohit@avavbusiness.com", engineerName: "Rohit Sharma", backupEngineerName: "Amit Verma" },
+    { name: "UP", keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"], engineerEmail: "l1.rahul@avavbusiness.com", engineerName: "Rahul Sharma", backupEngineerName: "Aman Singh" },
+    { name: "Rajasthan", keywords: ["jaipur", "ajmer", "rajasthan", "udaipur", "jodhpur"], engineerEmail: "l1.deepak.verma@avavbusiness.com", engineerName: "Deepak Verma", backupEngineerName: "Deepak Meena" },
+    { name: "Punjab", keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"], engineerEmail: "l1.rohit@avavbusiness.com", engineerName: "Rohit Sharma", backupEngineerName: "Amit Verma" },
+];
+const PORTAL_DISTRICT_L1_ENGINEER_MAPPING = [
+    { state: "Uttar Pradesh", district: "Ghaziabad", engineerEmail: "l1.rahul@avavbusiness.com", engineerName: "Rahul Sharma" },
+    { state: "Uttar Pradesh", district: "Noida", engineerEmail: "l1.aman@avavbusiness.com", engineerName: "Aman Singh" },
+    { state: "Rajasthan", district: "Jaipur", engineerEmail: "l1.deepak.verma@avavbusiness.com", engineerName: "Deepak Verma" },
 ];
 const PORTAL_ACTIVE_STATUSES = ["Assigned to Engineer", "In Progress at Aurawatt", "Escalated to L2", "Escalated to L3", "Spare Requested", "Dispatch in Progress"];
 const STATE_HINTS = [
@@ -85,6 +90,17 @@ function mapPortalRegion(location) {
 function normalizeForLookup(value) {
     return ` ${String(value ?? "").trim().toLowerCase()} `;
 }
+function normalizeExactLookup(value) {
+    return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");
+}
+function mappedPortalL1EngineerForDistrict(state, district) {
+    const normalizedState = normalizeExactLookup(state);
+    const normalizedDistrict = normalizeExactLookup(district);
+    if (!normalizedState || !normalizedDistrict)
+        return undefined;
+    return PORTAL_DISTRICT_L1_ENGINEER_MAPPING.find((mapping) => (normalizeExactLookup(mapping.state) === normalizedState &&
+        normalizeExactLookup(mapping.district) === normalizedDistrict));
+}
 function firstText(...values) {
     return values.map((value) => String(value ?? "").trim()).find(Boolean);
 }
@@ -109,13 +125,18 @@ function calculateWarrantyStatus(soldDate) {
         return "Unknown";
     return addMonths(parsed, STANDARD_WARRANTY_MONTHS).getTime() >= Date.now() ? "In Warranty" : "Out of Warranty";
 }
-async function assignPortalTicket(issueDescription, location) {
+async function assignPortalTicket(issueDescription, input) {
     const c = await (0, collections_1.getCollections)();
-    const region = mapPortalRegion(location);
+    const region = mapPortalRegion(input.location);
+    const mappedEngineer = mappedPortalL1EngineerForDistrict(input.state, input.district);
+    const targetEngineer = mappedEngineer ?? region;
+    const engineer = await c.users.findOne({ email: targetEngineer.engineerEmail, role: "L1 Engineer", isActive: { $ne: false } }, { projection: { id: 1, name: 1 } });
+    const assignedEngineerId = engineer?.id ?? targetEngineer.engineerEmail;
+    const assignedEngineerName = engineer?.name ?? targetEngineer.engineerName;
     const priority = derivePriority(issueDescription);
     const now = new Date();
     const activeCount = await c.complaints.countDocuments({
-        assignedEngineerId: region.engineerId,
+        assignedEngineerId,
         status: { $in: PORTAL_ACTIVE_STATUSES },
     });
     if (activeCount >= MAX_ACTIVE_TICKETS_PER_ENGINEER) {
@@ -135,8 +156,8 @@ async function assignPortalTicket(issueDescription, location) {
         region: region.name,
         priority,
         assignmentStatus: "Assigned",
-        assignedEngineerId: region.engineerId,
-        assignedEngineerName: region.engineerName,
+        assignedEngineerId,
+        assignedEngineerName,
         backupEngineerName: region.backupEngineerName,
         activeTicketCountAtAssignment: activeCount,
         slaStartedAt: now,
@@ -255,7 +276,11 @@ router.post("/complaints", async (req, res) => {
         return (0, http_1.fail)(res, "Customer name and mobile number are required");
     }
     const now = new Date();
-    const assignment = await assignPortalTicket(issueDescription, invoiceDetails.region || siteLocation);
+    const assignment = await assignPortalTicket(issueDescription, {
+        location: invoiceDetails.region || siteLocation,
+        state: invoiceDetails.state,
+        district: invoiceDetails.district,
+    });
     const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured.customerPhones);
     const complaint = {
         id: (0, id_1.generateId)(),

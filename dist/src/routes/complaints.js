@@ -70,6 +70,11 @@ const SERVICE_REGIONS = [
         ],
     },
 ];
+const DISTRICT_L1_ENGINEER_MAPPING = [
+    { state: "Uttar Pradesh", district: "Ghaziabad", engineerEmail: "l1.rahul@avavbusiness.com", engineerName: "Rahul Sharma" },
+    { state: "Uttar Pradesh", district: "Noida", engineerEmail: "l1.aman@avavbusiness.com", engineerName: "Aman Singh" },
+    { state: "Rajasthan", district: "Jaipur", engineerEmail: "l1.deepak.verma@avavbusiness.com", engineerName: "Deepak Verma" },
+];
 const ACTIVE_ENGINEER_STATUSES = [
     "Assigned to Engineer",
     "In Progress at Aurawatt",
@@ -87,6 +92,9 @@ const SERVICE_ROLE_BY_LEVEL = {
 const ASSIGNABLE_SERVICE_ENGINEER_EMAILS = new Set([
     "l1.rohit@avavbusiness.com",
     "l1.amit@avavbusiness.com",
+    "l1.rahul@avavbusiness.com",
+    "l1.aman@avavbusiness.com",
+    "l1.deepak.verma@avavbusiness.com",
     "l2.vikas@avavbusiness.com",
     "l2.sandeep@avavbusiness.com",
     "l3.mahesh@avavbusiness.com",
@@ -94,6 +102,17 @@ const ASSIGNABLE_SERVICE_ENGINEER_EMAILS = new Set([
 ]);
 function normalizeText(value) {
     return String(value ?? "").trim();
+}
+function normalizeLookup(value) {
+    return normalizeText(value).toLowerCase().replace(/\s+/g, " ");
+}
+function mappedL1EngineerForDistrict(state, district) {
+    const normalizedState = normalizeLookup(state);
+    const normalizedDistrict = normalizeLookup(district);
+    if (!normalizedState || !normalizedDistrict)
+        return undefined;
+    return DISTRICT_L1_ENGINEER_MAPPING.find((mapping) => (normalizeLookup(mapping.state) === normalizedState &&
+        normalizeLookup(mapping.district) === normalizedDistrict));
 }
 function mapRegion(input) {
     const text = normalizeText(input).toLowerCase();
@@ -200,9 +219,15 @@ async function buildServiceAssignment(input) {
     })));
     const preferredId = normalizeText(input.preferredEngineerId);
     const preferredName = normalizeText(input.preferredEngineerName).toLowerCase();
+    const preferredEmail = normalizeText(input.preferredEngineerEmail).toLowerCase();
+    const districtEngineer = input.level === "L1" ? mappedL1EngineerForDistrict(input.state, input.district) : undefined;
     const preferredEngineer = (preferredId ? engineerStats.find((item) => item.id === preferredId) : undefined) ??
+        (preferredEmail ? engineerStats.find((item) => item.email.toLowerCase() === preferredEmail) : undefined) ??
         (preferredName ? engineerStats.find((item) => item.name.toLowerCase() === preferredName) : undefined);
-    const engineer = preferredEngineer ?? [...engineerStats].sort((a, b) => a.activeCount - b.activeCount || a.name.localeCompare(b.name))[0];
+    const mappedEngineer = districtEngineer
+        ? engineerStats.find((item) => item.email.toLowerCase() === districtEngineer.engineerEmail.toLowerCase() || item.name.toLowerCase() === districtEngineer.engineerName.toLowerCase())
+        : undefined;
+    const engineer = preferredEngineer ?? mappedEngineer ?? [...engineerStats].sort((a, b) => a.activeCount - b.activeCount || a.name.localeCompare(b.name))[0];
     const canAssign = Boolean(engineer) && (input.forceAssign || (engineer?.activeCount ?? 0) < MAX_ACTIVE_SERVICE_TICKETS);
     if (!canAssign || !engineer) {
         const queuePosition = (await c.complaints.countDocuments({
@@ -267,6 +292,8 @@ async function releaseNextWaitingTicket(region) {
         issueDescription: next.issueDescription,
         siteLocation: next.siteLocation,
         region: next.region,
+        state: next.state,
+        district: next.district,
         priority: next.priority,
         l1Sla: next.l1Sla,
         excludeComplaintId: next.id,
@@ -458,9 +485,18 @@ router.post("/upload-inverter-picture", auth_1.authenticate, (0, auth_1.requireA
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
+    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, state, district, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, dispatchLrCopyName, dispatchLrCopyUrl, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
+    const mobileNumber = req.body.mobileNumber ?? req.body.customerPhone;
+    const installationDate = req.body.installationDate ?? dateOfSale;
+    const complaintState = req.body.state;
+    const complaintDistrict = req.body.district;
     if (!type || !dateOfComplaint || !issueDescription) {
         return (0, http_1.fail)(res, "type, dateOfComplaint, issueDescription are required");
+    }
+    if (String(type).toLowerCase() === "consumer") {
+        if (!productSerialNo || !customerName || !mobileNumber || !complaintState || !complaintDistrict) {
+            return (0, http_1.fail)(res, "Serial number, customer name, mobile number, state, district and complaint description are required");
+        }
     }
     const user = req.user;
     if (user.role === "Sales") {
@@ -478,6 +514,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
             issueDescription,
             siteLocation,
             region,
+            state: complaintState,
+            district: complaintDistrict,
             priority,
             l1Sla,
             forceAssign: Boolean(forceAssign),
@@ -489,16 +527,20 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         type,
         productSerialNo,
         customerName,
+        customerPhone: mobileNumber ? String(mobileNumber) : undefined,
         rawMaterialId,
         rawMaterialName,
         vendorName,
-        dateOfSale: dateOfSale ? new Date(dateOfSale) : undefined,
+        dateOfSale: installationDate ? new Date(installationDate) : undefined,
+        installationDate: installationDate ? new Date(installationDate) : undefined,
         dateOfComplaint: new Date(dateOfComplaint),
         issueDescription,
         ticketSource,
         l1Sla,
         dealerName,
         siteLocation,
+        state: complaintState ? String(complaintState) : undefined,
+        district: complaintDistrict ? String(complaintDistrict) : undefined,
         region: assignment?.region ?? region,
         priority: assignment?.priority ?? derivePriority(issueDescription, priority),
         warrantyStatus,
@@ -533,6 +575,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         spareInventoryStatus,
         spareRequestStatus,
         dispatchTrackingNo,
+        dispatchLrCopyName,
+        dispatchLrCopyUrl,
         procurementStatus,
         chargeableApprovalStatus,
         paymentVerificationStatus,
@@ -601,8 +645,12 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     const allowedFields = [
         "dealerName",
         "customerName",
+        "customerPhone",
         "siteLocation",
+        "state",
+        "district",
         "region",
+        "installationDate",
         "priority",
         "warrantyStatus",
         "productModel",
@@ -626,6 +674,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "spareInventoryStatus",
         "spareRequestStatus",
         "dispatchTrackingNo",
+        "dispatchLrCopyName",
+        "dispatchLrCopyUrl",
         "procurementStatus",
         "chargeableApprovalStatus",
         "paymentVerificationStatus",
@@ -681,6 +731,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     else {
         delete update.closedAt;
     }
+    if ("installationDate" in req.body && req.body.installationDate)
+        update.installationDate = new Date(req.body.installationDate);
     if ("siteVisitScheduledDate" in req.body && req.body.siteVisitScheduledDate)
         update.siteVisitScheduledDate = new Date(req.body.siteVisitScheduledDate);
     if (req.body.forceAssign || req.body.reassignEngineerName) {
@@ -688,6 +740,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             issueDescription: existing.issueDescription,
             siteLocation: req.body.siteLocation ?? existing.siteLocation,
             region: req.body.region ?? existing.region,
+            state: req.body.state ?? existing.state,
+            district: req.body.district ?? existing.district,
             priority: req.body.priority ?? existing.priority,
             l1Sla: existing.l1Sla,
             forceAssign: Boolean(req.body.forceAssign),
@@ -779,6 +833,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
                     serialNumber: updated.productSerialNo,
                     status: updated.status,
                     escalationLevel: updated.escalationLevel,
+                    serviceStartedAt: updated.serviceStartedAt,
+                    closedAt: updated.closedAt,
                     finalResolution: updated.finalResolution,
                 },
                 audienceRoles: ["Admin"],
@@ -800,6 +856,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
                         status: updated.status,
                         closedByName: updated.closedByName,
                         closedByRole: updated.closedByRole,
+                        serviceStartedAt: updated.serviceStartedAt,
+                        closedAt: updated.closedAt,
                         closeRemark: updated.closeRemark,
                         finalResolution: updated.finalResolution,
                         siteVisitScheduledDate: updated.siteVisitScheduledDate,

@@ -358,6 +358,7 @@ export type Complaint = {
   rawMaterialName?: string;
   vendorName?: string;
   dateOfSale?: Date;
+  installationDate?: Date;
   dateOfComplaint: Date;
   issueDescription: string;
   ticketSource?: "Call" | "WhatsApp" | "Link" | "ERP";
@@ -402,6 +403,8 @@ export type Complaint = {
   spareInventoryStatus?: "Not Required" | "Available" | "Procurement Required";
   spareRequestStatus?: "Not Required" | "Requested" | "Reserved" | "Dispatched" | "Procurement Triggered" | string;
   dispatchTrackingNo?: string;
+  dispatchLrCopyName?: string;
+  dispatchLrCopyUrl?: string;
   procurementStatus?: "Not Required" | "Vendor Triggered" | "Approval Pending" | "Processing" | "Received" | string;
   chargeableApprovalStatus?: "Not Required" | "Pending" | "Approved" | "Rejected" | string;
   paymentVerificationStatus?: "Pending" | "Verified" | string;
