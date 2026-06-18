@@ -475,12 +475,14 @@ export type Complaint = {
   siteVisitRequestedByName?: string;
   siteVisitRequestedByRole?: string;
   siteVisitRequestedAt?: Date;
+  siteVisitAcceptedAt?: Date;
   siteVisitRemarks?: string;
   siteVisitSpareParts?: SparePartRequirement[];
   siteVisitScheduledDate?: Date;
   siteVisitAssignedById?: string;
   siteVisitAssignedByName?: string;
   siteVisitAssignedByRole?: string;
+  siteVisitCompletedAt?: Date;
   engineerName?: string;
   l3SupportRequired?: boolean;
   replacementReason?: string;

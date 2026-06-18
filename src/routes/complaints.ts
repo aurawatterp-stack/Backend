@@ -540,6 +540,18 @@ function complaintRoleScope(user: AuthUser): Record<string, unknown> | null {
   return null;
 }
 
+function onsiteTrackingScope(user: AuthUser): Record<string, unknown> | null {
+  if (user.role !== "L2 Technical Team") return null;
+  const or: Record<string, unknown>[] = [{ siteVisitAssignedById: user.userId }];
+  if (user.name) {
+    or.push({ siteVisitAssignedByName: user.name });
+  }
+  return {
+    siteVisitRequired: true,
+    $or: or,
+  };
+}
+
 function applyComplaintRoleScope(filter: Record<string, unknown>, user: AuthUser) {
   const scope = complaintRoleScope(user);
   return scope ? { $and: [filter, scope] } : filter;
@@ -576,18 +588,29 @@ function canAccessComplaint(user: AuthUser, complaint: Complaint): boolean {
 /** GET /api/complaints — filter by type, status */
 router.get("/", authenticate, requireAnyPermission("complaints:consumer", "complaints:supplier", "dispatch:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
-  const { type, status, page = "1", limit = "20" } = req.query as Record<string, string>;
+  const { type, status, page = "1", limit = "20", view } = req.query as Record<string, string>;
   const user = (req as any).user as AuthUser;
   if (type && !requireComplaintTypeAccess(user, type)) {
     return fail(res, "Access denied: insufficient permissions", 403);
   }
-  if (!type || String(type).toLowerCase() === "consumer") {
+  if (!view && (!type || String(type).toLowerCase() === "consumer")) {
     await rebalanceL1Queue();
   }
   const filter: Record<string, unknown> = {};
   if (type) filter.type = type;
   if (status) filter.status = status;
-  const scopedFilter = applyComplaintRoleScope(filter, user);
+  const scopedFilter = view === "onsite-tracking"
+    ? (() => {
+        const scope = onsiteTrackingScope(user);
+        if (!scope) {
+          return null;
+        }
+        return { $and: [filter, scope] };
+      })()
+    : applyComplaintRoleScope(filter, user);
+  if (!scopedFilter) {
+    return fail(res, "Access denied: insufficient permissions", 403);
+  }
 
   const p = Math.max(1, parseInt(page));
   const l = Math.min(100, parseInt(limit));
@@ -1060,11 +1083,15 @@ router.put(
     const update: Record<string, unknown> = { updatedAt: serverNow, l1InspectionValid };
     const workflowHistory: NonNullable<Complaint["workflowHistory"]> = [];
     const extraNotifications: Notification[] = [];
+    const siteVisitActive = Boolean(req.body.siteVisitRequired ?? existing.siteVisitRequired);
     for (const field of allowedFields) {
       if (field in req.body) update[field] = req.body[field];
     }
     if ((req.body.status === "In Progress at Aurawatt" || ("serviceStartedAt" in req.body && req.body.serviceStartedAt)) && !existing.serviceStartedAt) {
       update.serviceStartedAt = serverNow;
+      if (siteVisitActive && !existing.siteVisitAcceptedAt) {
+        update.siteVisitAcceptedAt = serverNow;
+      }
     } else {
       delete update.serviceStartedAt;
     }
@@ -1077,6 +1104,9 @@ router.put(
     }
     if (CLOSED_COMPLAINT_STATUSES.includes(String(req.body.status) as (typeof CLOSED_COMPLAINT_STATUSES)[number])) {
       update.closedAt = serverNow;
+      if (siteVisitActive && !existing.siteVisitCompletedAt) {
+        update.siteVisitCompletedAt = serverNow;
+      }
     } else {
       delete update.closedAt;
     }
