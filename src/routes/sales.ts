@@ -38,9 +38,8 @@ function parsePiItems(value: unknown): Sale["piItems"] {
 type SalesCollections = Awaited<ReturnType<typeof getCollections>>;
 const PI_WORKFLOW_VERSION = "payment-dispatch-v2";
 const PI_STATUS_SUBMITTED = "PI Submitted - Pending Payment Verification";
-const PI_STATUS_PAYMENT_VERIFIED = "Payment Verified - Pending Dispatch Preparation";
-const PI_STATUS_DISPATCH_READY = "Dispatch Ready - Pending Invoice & E-Way Bill";
-const PI_STATUS_READY_FOR_FINAL_DISPATCH = "Ready for Final Dispatch";
+const PI_STATUS_PAYMENT_VERIFIED = "Payment Verified";
+const PI_STATUS_DISPATCH_READY = "Dispatch Ready";
 const PI_STATUS_DISPATCHED = "Dispatched";
 
 function piYearFromDate(value: unknown) {
@@ -472,14 +471,14 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
   }
   if (isNewPiWorkflow(sale) && hasDocumentUpload) {
     update.paymentStatus = "Confirmed";
-    update.piWorkflowStatus = PI_STATUS_READY_FOR_FINAL_DISPATCH;
+    update.piWorkflowStatus = PI_STATUS_DISPATCH_READY;
     event = workflowEvent(
       sale,
       user,
       "Upload Tax Invoice and E-Way Bill",
-      PI_STATUS_READY_FOR_FINAL_DISPATCH,
+      PI_STATUS_DISPATCH_READY,
       "Accounts",
-      "Accounts documents uploaded and request moved to Dispatch Team"
+      "Accounts documents uploaded and request returned to Dispatch Team"
     );
   }
 
@@ -545,7 +544,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   const sale = await c.sales.findOne({ id });
   if (!sale) return fail(res, "PI record not found", 404);
   const user = (req as any).user as AuthUser;
-  const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered";
+  const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered" || dispatchStatus === "Dispatched";
 
   if (isNewPiWorkflow(sale)) {
     if (sale.paymentStatus !== "Confirmed") {
@@ -554,7 +553,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     if (dispatchStatus === "Ready" && sale.piWorkflowStatus !== PI_STATUS_PAYMENT_VERIFIED) {
       return fail(res, "Dispatch Ready can only be marked after Accounts verifies payment");
     }
-    if (isDeliveryStatus && sale.piWorkflowStatus !== PI_STATUS_READY_FOR_FINAL_DISPATCH) {
+    if (isDeliveryStatus && sale.piWorkflowStatus !== PI_STATUS_DISPATCH_READY) {
       return fail(res, "Final dispatch can happen only after Accounts uploads Tax Invoice and E-Way Bill");
     }
     if (
@@ -564,7 +563,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
       return fail(res, "Tax Invoice and E-Way Bill are required before final dispatch");
     }
     if (dispatchStatus !== undefined && dispatchStatus !== "Ready" && !isDeliveryStatus) {
-      return fail(res, "New PI workflow supports only Dispatch Ready or Final Dispatch actions from Dispatch Team");
+      return fail(res, "New PI workflow supports only Dispatch Ready or final dispatch actions from Dispatch Team");
     }
   }
 
@@ -633,11 +632,11 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     );
   }
   if (isNewPiWorkflow(sale) && isDeliveryStatus) {
-    update.dispatchStatus = "Delivered";
+    update.dispatchStatus = "Dispatched";
     update.piWorkflowStatus = PI_STATUS_DISPATCHED;
     update.finalDispatchAt = new Date();
     update.finalDispatchBy = user.userId;
-    event = workflowEvent(sale, user, "Final Dispatch", PI_STATUS_DISPATCHED, "Dispatch", "Final dispatch completed");
+    event = workflowEvent(sale, user, "Mark as Dispatched", PI_STATUS_DISPATCHED, "Dispatch", "Final dispatch completed");
   }
 
   if (Object.keys(update).length === 0) return fail(res, "No dispatch updates provided");

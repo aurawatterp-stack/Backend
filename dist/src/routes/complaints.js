@@ -10,9 +10,8 @@ const auth_1 = require("../middleware/auth");
 const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
+const complaintRules_1 = require("../utils/complaintRules");
 const router = express_1.default.Router();
-const MAX_ACTIVE_L1_TICKETS = 5;
-const MAX_ACTIVE_SERVICE_TICKETS = 5;
 const MAX_INVERTER_PICTURE_BYTES = 5 * 1024 * 1024;
 const inverterPictureUpload = (0, multer_1.default)({
     storage: multer_1.default.memoryStorage(),
@@ -80,10 +79,12 @@ const ACTIVE_ENGINEER_STATUSES = [
     "In Progress at Aurawatt",
     "Escalated to L2",
     "Escalated to L3",
+    "Pending L3 Approval",
     "Spare Requested",
+    "Replacement Requested",
+    "Awaiting Dispatch",
     "Dispatch in Progress",
 ];
-const CLOSED_STATUSES = ["Resolved by Aurawatt", "Resolved by Suppliers"];
 const SERVICE_ROLE_BY_LEVEL = {
     L1: "L1 Engineer",
     L2: "L2 Technical Team",
@@ -132,15 +133,36 @@ function activeQueueRank(status) {
         return 0;
     if (status === "Assigned to Engineer")
         return 1;
+    if (status === "Assigned for Onsite")
+        return 2;
     if (status === "Escalated to L2")
         return 2;
     if (status === "Escalated to L3")
         return 3;
+    if (status === "Pending L3 Approval")
+        return 3;
     if (status === "Spare Requested")
         return 4;
+    if (status === "Replacement Requested")
+        return 4;
+    if (status === "Awaiting Dispatch")
+        return 5;
     if (status === "Dispatch in Progress")
         return 5;
     return 6;
+}
+function createWorkflowHistoryEvent(input) {
+    return {
+        id: (0, id_1.generateId)(),
+        action: input.action,
+        fromStatus: input.fromStatus,
+        toStatus: input.toStatus,
+        by: input.user.userId,
+        byName: input.user.name,
+        byRole: input.user.role,
+        at: new Date(),
+        note: input.note,
+    };
 }
 function sortForL1Queue(rows) {
     return [...rows].sort((a, b) => (activeQueueRank(a.status) - activeQueueRank(b.status) ||
@@ -160,11 +182,8 @@ function derivePriority(issueDescription, requestedPriority) {
         return "Medium";
     return "Low";
 }
-function parseSlaHours(l1Sla, priority) {
-    if (priority === "Emergency")
-        return 2;
-    const hours = parseInt(normalizeText(l1Sla), 10);
-    return Number.isFinite(hours) && hours > 0 ? hours : 4;
+function slaHoursForLevel(level) {
+    return level === "L1" ? 4 : 48;
 }
 function addHours(date, hours) {
     return new Date(date.getTime() + hours * 60 * 60 * 1000);
@@ -186,15 +205,33 @@ function normalizeServiceLevel(value) {
         return "L3";
     return "L1";
 }
-async function activeTicketCountForEngineer(engineerId, excludeComplaintId) {
+function engineerIdentityFilter(engineerId, engineerName) {
+    const or = [{ assignedEngineerId: engineerId }];
+    if (engineerName) {
+        or.push({ assignedEngineerName: engineerName });
+    }
+    return { $or: or };
+}
+async function engineerTicketCounts(engineerId, engineerName, excludeComplaintId) {
     const c = await (0, collections_1.getCollections)();
-    const filter = {
-        assignedEngineerId: engineerId,
+    const activeFilter = {
+        ...engineerIdentityFilter(engineerId, engineerName),
         status: { $in: ACTIVE_ENGINEER_STATUSES },
     };
-    if (excludeComplaintId)
-        filter.id = { $ne: excludeComplaintId };
-    return c.complaints.countDocuments(filter);
+    const waitingFilter = {
+        ...engineerIdentityFilter(engineerId, engineerName),
+        assignmentStatus: "Waiting",
+        status: "Waiting Lobby",
+    };
+    if (excludeComplaintId) {
+        activeFilter.id = { $ne: excludeComplaintId };
+        waitingFilter.id = { $ne: excludeComplaintId };
+    }
+    const [activeCount, waitingCount] = await Promise.all([
+        c.complaints.countDocuments(activeFilter),
+        c.complaints.countDocuments(waitingFilter),
+    ]);
+    return { activeCount, waitingCount };
 }
 async function serviceEngineers(level) {
     const c = await (0, collections_1.getCollections)();
@@ -208,14 +245,13 @@ async function serviceEngineers(level) {
     return users.map((user) => ({ id: user.id, name: user.name, email: user.email, role: user.role }));
 }
 async function buildServiceAssignment(input) {
-    const c = await (0, collections_1.getCollections)();
     const regionConfig = input.region ? mapRegion(input.region) : mapRegion(input.siteLocation);
     const priority = derivePriority(input.issueDescription, input.priority);
     const now = new Date();
     const engineers = await serviceEngineers(input.level);
     const engineerStats = await Promise.all(engineers.map(async (engineer) => ({
         ...engineer,
-        activeCount: await activeTicketCountForEngineer(engineer.id, input.excludeComplaintId),
+        ...await engineerTicketCounts(engineer.id, engineer.name, input.excludeComplaintId),
     })));
     const preferredId = normalizeText(input.preferredEngineerId);
     const preferredName = normalizeText(input.preferredEngineerName).toLowerCase();
@@ -227,68 +263,92 @@ async function buildServiceAssignment(input) {
     const mappedEngineer = districtEngineer
         ? engineerStats.find((item) => item.email.toLowerCase() === districtEngineer.engineerEmail.toLowerCase() || item.name.toLowerCase() === districtEngineer.engineerName.toLowerCase())
         : undefined;
-    const engineer = preferredEngineer ?? mappedEngineer ?? [...engineerStats].sort((a, b) => a.activeCount - b.activeCount || a.name.localeCompare(b.name))[0];
-    const canAssign = Boolean(engineer) && (input.forceAssign || (engineer?.activeCount ?? 0) < MAX_ACTIVE_SERVICE_TICKETS);
-    if (!canAssign || !engineer) {
-        const queuePosition = (await c.complaints.countDocuments({
-            type: "Consumer",
-            assignmentStatus: "Waiting",
-            escalationLevel: input.level,
-            status: "Waiting Lobby",
-        })) + 1;
-        return {
-            region: regionConfig.name,
-            priority,
-            escalationLevel: input.level,
-            assignmentStatus: "Waiting",
-            waitingSince: now,
-            slaPaused: true,
-            queuePosition,
-            status: "Waiting Lobby",
-            assignedEngineerId: undefined,
-            assignedEngineerName: undefined,
-        };
+    const engineer = preferredEngineer ?? mappedEngineer ?? [...engineerStats].sort((a, b) => (a.activeCount - b.activeCount ||
+        a.waitingCount - b.waitingCount ||
+        a.name.localeCompare(b.name)))[0];
+    if (!engineer) {
+        return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
     }
-    const slaHours = parseSlaHours(input.l1Sla, priority);
+    if (preferredEngineer || mappedEngineer) {
+        if (engineer.activeCount < complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
+            // fall through to active assignment below
+        }
+        else if (engineer.waitingCount < complaintRules_1.MAX_WAITING_LOBBY_TICKETS) {
+            // fall through to waiting assignment below
+        }
+        else {
+            return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+        }
+    }
+    else if (engineer.activeCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS && engineer.waitingCount >= complaintRules_1.MAX_WAITING_LOBBY_TICKETS) {
+        return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+    }
+    const slaHours = slaHoursForLevel(input.level);
     const statusByLevel = {
         L1: "Assigned to Engineer",
         L2: "Escalated to L2",
         L3: "Escalated to L3",
     };
+    if (engineer.activeCount < complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
+        return {
+            region: regionConfig.name,
+            priority,
+            escalationLevel: input.level,
+            assignmentStatus: "Assigned",
+            assignedEngineerId: engineer.id,
+            assignedEngineerName: engineer.name,
+            backupEngineerName: engineerStats.find((candidate) => candidate.id !== engineer.id)?.name,
+            activeTicketCountAtAssignment: engineer.activeCount,
+            slaStartedAt: now,
+            slaDueAt: addHours(now, slaHours),
+            slaPaused: false,
+            queuePosition: undefined,
+            status: statusByLevel[input.level],
+        };
+    }
     return {
         region: regionConfig.name,
         priority,
         escalationLevel: input.level,
-        assignmentStatus: "Assigned",
+        assignmentStatus: "Waiting",
         assignedEngineerId: engineer.id,
         assignedEngineerName: engineer.name,
         backupEngineerName: engineerStats.find((candidate) => candidate.id !== engineer.id)?.name,
-        activeTicketCountAtAssignment: engineer.activeCount,
-        slaStartedAt: now,
-        slaDueAt: addHours(now, slaHours),
-        slaPaused: false,
-        queuePosition: undefined,
-        status: statusByLevel[input.level],
+        waitingSince: now,
+        slaPaused: true,
+        queuePosition: engineer.waitingCount + 1,
+        status: "Waiting Lobby",
     };
 }
 async function buildAssignment(input) {
     return buildServiceAssignment({ ...input, level: "L1" });
 }
-async function releaseNextWaitingTicket(region) {
+async function releaseNextWaitingTicket(engineerId, engineerName, level) {
     const c = await (0, collections_1.getCollections)();
     const filter = { assignmentStatus: "Waiting", status: "Waiting Lobby" };
-    if (region)
-        filter.region = region;
-    const waiting = await c.complaints
-        .find(filter)
-        .toArray();
+    if (level)
+        filter.escalationLevel = level;
+    if (engineerId || engineerName) {
+        filter.$or = [
+            ...(engineerId ? [{ assignedEngineerId: engineerId }] : []),
+            ...(engineerName ? [{ assignedEngineerName: engineerName }] : []),
+        ];
+    }
+    let waiting = await c.complaints.find(filter).toArray();
+    if (!waiting.length && level) {
+        waiting = await c.complaints.find({
+            assignmentStatus: "Waiting",
+            status: "Waiting Lobby",
+            escalationLevel: level,
+        }).toArray();
+    }
     const next = waiting
-        .sort((a, b) => priorityRank(a.priority) - priorityRank(b.priority) || new Date(a.waitingSince ?? a.createdAt).getTime() - new Date(b.waitingSince ?? b.createdAt).getTime())[0];
+        .sort((a, b) => new Date(a.waitingSince ?? a.createdAt).getTime() - new Date(b.waitingSince ?? b.createdAt).getTime() || priorityRank(a.priority) - priorityRank(b.priority))[0];
     if (!next)
         return;
-    const level = normalizeServiceLevel(next.escalationLevel);
+    const nextLevel = normalizeServiceLevel(next.escalationLevel);
     const assignment = await buildServiceAssignment({
-        level,
+        level: nextLevel,
         issueDescription: next.issueDescription,
         siteLocation: next.siteLocation,
         region: next.region,
@@ -297,13 +357,20 @@ async function releaseNextWaitingTicket(region) {
         priority: next.priority,
         l1Sla: next.l1Sla,
         excludeComplaintId: next.id,
+        preferredEngineerId: next.assignedEngineerId,
+        preferredEngineerName: next.assignedEngineerName,
+        preferredEngineerEmail: next.assignedEngineerId,
     });
-    if (assignment.assignmentStatus !== "Assigned")
+    if (assignment.blockedMessage || assignment.assignmentStatus !== "Assigned")
         return;
+    const promotedAt = new Date();
+    const queuePeers = waiting.filter((complaint) => (complaint.id !== next.id && ((next.assignedEngineerId && complaint.assignedEngineerId === next.assignedEngineerId) ||
+        (next.assignedEngineerName && complaint.assignedEngineerName === next.assignedEngineerName))));
+    await Promise.all(queuePeers.map((complaint, index) => c.complaints.updateOne({ id: complaint.id }, { $set: { queuePosition: index + 1, updatedAt: promotedAt } })));
     await c.complaints.updateOne({ id: next.id }, {
         $set: {
             ...assignment,
-            updatedAt: new Date(),
+            updatedAt: promotedAt,
         },
         $unset: { waitingSince: "", queuePosition: "" },
     });
@@ -325,27 +392,40 @@ async function rebalanceL1Queue() {
         rows.push(complaint);
         byEngineer.set(complaint.assignedEngineerId, rows);
     }
-    const overflow = [...byEngineer.values()].flatMap((rows) => (rows.length > MAX_ACTIVE_L1_TICKETS ? sortForL1Queue(rows).slice(MAX_ACTIVE_L1_TICKETS) : []));
-    if (!overflow.length)
-        return;
-    const waitingCount = await c.complaints.countDocuments({ type: "Consumer", assignmentStatus: "Waiting", status: "Waiting Lobby" });
     const now = new Date();
-    await Promise.all(overflow.map((complaint, index) => c.complaints.updateOne({ id: complaint.id }, {
-        $set: {
+    const updates = [];
+    for (const [engineerId, rows] of byEngineer.entries()) {
+        if (rows.length <= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS)
+            continue;
+        const engineerName = rows[0]?.assignedEngineerName;
+        const waitingCount = await c.complaints.countDocuments({
+            ...engineerIdentityFilter(engineerId, engineerName),
             assignmentStatus: "Waiting",
             status: "Waiting Lobby",
-            waitingSince: complaint.waitingSince ?? now,
-            slaPaused: true,
-            queuePosition: waitingCount + index + 1,
-            updatedAt: now,
-        },
-        $unset: {
-            assignedEngineerId: "",
-            assignedEngineerName: "",
-            slaStartedAt: "",
-            slaDueAt: "",
-        },
-    })));
+        });
+        const overflow = sortForL1Queue(rows).slice(complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS);
+        overflow.forEach((complaint, index) => {
+            updates.push(c.complaints.updateOne({ id: complaint.id }, {
+                $set: {
+                    assignmentStatus: "Waiting",
+                    status: "Waiting Lobby",
+                    assignedEngineerId: complaint.assignedEngineerId,
+                    assignedEngineerName: complaint.assignedEngineerName,
+                    waitingSince: complaint.waitingSince ?? now,
+                    slaPaused: true,
+                    queuePosition: waitingCount + index + 1,
+                    updatedAt: now,
+                },
+                $unset: {
+                    slaStartedAt: "",
+                    slaDueAt: "",
+                },
+            }));
+        });
+    }
+    if (!updates.length)
+        return;
+    await Promise.all(updates);
 }
 function requireComplaintTypeAccess(user, type) {
     const t = (type || "").trim().toLowerCase();
@@ -364,7 +444,10 @@ function complaintRoleScope(user) {
                 { assignedEngineerId: user.userId },
                 ...(user.name ? [{ assignedEngineerName: user.name }] : []),
                 { siteVisitRequired: true, siteVisitEngineerId: user.userId },
+                ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
                 ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
+                { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
+                ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
             ],
         };
@@ -375,7 +458,10 @@ function complaintRoleScope(user) {
                 { assignedEngineerId: user.userId },
                 ...(user.name ? [{ assignedEngineerName: user.name }] : []),
                 { siteVisitRequired: true, siteVisitEngineerId: user.userId },
+                ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
                 ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
+                { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
+                ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
             ],
         };
@@ -396,14 +482,16 @@ function canAccessComplaint(user, complaint) {
         return (complaint.assignedEngineerId === user.userId ||
             (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
             (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-            (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.engineerName === user.name) ||
+            (complaint.siteVisitRequired === true && Boolean(user.name) && (complaint.siteVisitEngineerName === user.name || complaint.engineerName === user.name)) ||
+            (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1"));
     }
     if (user.role === "L2 Technical Team") {
         return (complaint.assignedEngineerId === user.userId ||
             (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
             (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-            (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.engineerName === user.name) ||
+            (complaint.siteVisitRequired === true && Boolean(user.name) && (complaint.siteVisitEngineerName === user.name || complaint.engineerName === user.name)) ||
+            (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2"));
     }
     if (user.role === "L3 Advanced OEM Support") {
@@ -441,10 +529,14 @@ router.get("/stats", auth_1.authenticate, (0, auth_1.requireAnyPermission)("comp
         "Open at Aurawatt",
         "Waiting Lobby",
         "Assigned to Engineer",
+        "Assigned for Onsite",
         "In Progress at Aurawatt",
         "Escalated to L2",
         "Escalated to L3",
+        "Pending L3 Approval",
         "Spare Requested",
+        "Replacement Requested",
+        "Awaiting Dispatch",
         "Dispatch in Progress",
         "Resolved by Aurawatt",
         "Pending with Suppliers",
@@ -485,7 +577,7 @@ router.post("/upload-inverter-picture", auth_1.authenticate, (0, auth_1.requireA
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, state, district, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, dispatchLrCopyName, dispatchLrCopyUrl, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, engineerName, l3SupportRequired, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
+    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, state, district, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, dispatchLrCopyName, dispatchLrCopyUrl, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, siteVisitEngineerId, siteVisitEngineerName, siteVisitRequestedById, siteVisitRequestedByName, siteVisitRequestedByRole, siteVisitRequestedAt, siteVisitRemarks, siteVisitSpareParts, siteVisitScheduledDate, siteVisitAssignedById, siteVisitAssignedByName, siteVisitAssignedByRole, engineerName, l3SupportRequired, replacementReason, replacementRemarks, replacementRequestImages, replacementRequestedById, replacementRequestedByName, replacementRequestedByRole, replacementRequestedAt, replacementApprovedById, replacementApprovedByName, replacementApprovedByRole, replacementApprovedAt, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
     const mobileNumber = req.body.mobileNumber ?? req.body.customerPhone;
     const installationDate = req.body.installationDate ?? dateOfSale;
     const complaintState = req.body.state;
@@ -505,6 +597,16 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
     if (!requireComplaintTypeAccess(user, String(type))) {
         return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
     }
+    const productSerialNoKey = (0, complaintRules_1.normalizeComplaintSerialKey)(productSerialNo);
+    if (productSerialNoKey) {
+        const activeDuplicate = await c.complaints.findOne({
+            productSerialNoKey,
+            status: { $nin: [...complaintRules_1.CLOSED_COMPLAINT_STATUSES] },
+        });
+        if (activeDuplicate) {
+            return (0, http_1.fail)(res, complaintRules_1.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE, 409);
+        }
+    }
     const l1InspectionValid = isL1InspectionValid(l1Inspection);
     if (["L2", "L3"].includes(String(escalationLevel ?? "")) && !l1InspectionValid) {
         return (0, http_1.fail)(res, "L1 inspection readings are mandatory before L2/L3 escalation");
@@ -522,10 +624,14 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
             preferredEngineerName: engineerName,
         })
         : undefined;
+    if (assignment?.blockedMessage) {
+        return (0, http_1.fail)(res, assignment.blockedMessage, 400);
+    }
     const complaint = {
         id: (0, id_1.generateId)(),
         type,
         productSerialNo,
+        productSerialNoKey: productSerialNoKey || undefined,
         customerName,
         customerPhone: mobileNumber ? String(mobileNumber) : undefined,
         rawMaterialId,
@@ -591,8 +697,27 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         replacementEngineerName,
         dispatchPlan,
         siteVisitRequired,
+        siteVisitEngineerId,
+        siteVisitEngineerName,
+        siteVisitRequestedById,
+        siteVisitRequestedByName,
+        siteVisitRequestedByRole,
+        siteVisitRequestedAt: siteVisitRequestedAt ? new Date(siteVisitRequestedAt) : undefined,
+        siteVisitRemarks,
+        siteVisitSpareParts,
         engineerName,
         l3SupportRequired,
+        replacementReason,
+        replacementRemarks,
+        replacementRequestImages,
+        replacementRequestedById,
+        replacementRequestedByName,
+        replacementRequestedByRole,
+        replacementRequestedAt: replacementRequestedAt ? new Date(replacementRequestedAt) : undefined,
+        replacementApprovedById,
+        replacementApprovedByName,
+        replacementApprovedByRole,
+        replacementApprovedAt: replacementApprovedAt ? new Date(replacementApprovedAt) : undefined,
         finalResolution,
         clientFeedback,
         closureReport,
@@ -604,6 +729,12 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         raisedBy: user.userId,
         createdAt: new Date(),
         updatedAt: new Date(),
+        workflowHistory: [createWorkflowHistoryEvent({
+                action: "Complaint raised",
+                toStatus: assignment?.status ?? "Open at Aurawatt",
+                user,
+                note: "Complaint created through service intake.",
+            })],
     };
     await c.complaints.insertOne(complaint);
     return (0, http_1.ok)(res, complaint, 201);
@@ -623,9 +754,16 @@ router.put("/:id/status", auth_1.authenticate, (0, auth_1.requireAnyPermission)(
     if (!status)
         return (0, http_1.fail)(res, "status is required");
     const updatedAt = new Date();
-    await c.complaints.updateOne({ id }, { $set: { status, updatedAt } });
-    if (CLOSED_STATUSES.includes(String(status))) {
-        await releaseNextWaitingTicket();
+    const event = createWorkflowHistoryEvent({
+        action: "Status updated",
+        fromStatus: existing.status,
+        toStatus: String(status),
+        user,
+        note: `Status changed to ${status}.`,
+    });
+    await c.complaints.updateOne({ id }, { $set: { status, updatedAt }, $push: { workflowHistory: event } });
+    if (complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(status)) && (0, complaintRules_1.isActiveWorkComplaint)(existing)) {
+        await releaseNextWaitingTicket(existing.assignedEngineerId, existing.assignedEngineerName, normalizeServiceLevel(existing.escalationLevel));
     }
     return (0, http_1.ok)(res, { ...existing, status, updatedAt });
 });
@@ -642,6 +780,10 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     }
     const nextInspection = req.body.l1Inspection ?? existing.l1Inspection;
     const l1InspectionValid = isL1InspectionValid(nextInspection);
+    const isStartWorkRequest = req.body.status === "In Progress at Aurawatt" || (("serviceStartedAt" in req.body) && req.body.serviceStartedAt);
+    if (isStartWorkRequest && (existing.assignmentStatus === "Waiting" || existing.status === "Waiting Lobby" || existing.status === "Assigned for Onsite")) {
+        return (0, http_1.fail)(res, "Waiting Lobby tickets are queue only. Work can only be started from Active Work tickets.", 400);
+    }
     const allowedFields = [
         "dealerName",
         "customerName",
@@ -691,12 +833,30 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "dispatchPlan",
         "siteVisitRequired",
         "siteVisitEngineerId",
+        "siteVisitEngineerName",
+        "siteVisitRequestedById",
+        "siteVisitRequestedByName",
+        "siteVisitRequestedByRole",
+        "siteVisitRequestedAt",
+        "siteVisitRemarks",
+        "siteVisitSpareParts",
         "siteVisitScheduledDate",
         "siteVisitAssignedById",
         "siteVisitAssignedByName",
         "siteVisitAssignedByRole",
         "engineerName",
         "l3SupportRequired",
+        "replacementReason",
+        "replacementRemarks",
+        "replacementRequestImages",
+        "replacementRequestedById",
+        "replacementRequestedByName",
+        "replacementRequestedByRole",
+        "replacementRequestedAt",
+        "replacementApprovedById",
+        "replacementApprovedByName",
+        "replacementApprovedByRole",
+        "replacementApprovedAt",
         "finalResolution",
         "clientFeedback",
         "closureReport",
@@ -708,6 +868,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     ];
     const serverNow = new Date();
     const update = { updatedAt: serverNow, l1InspectionValid };
+    const workflowHistory = [];
+    const extraNotifications = [];
     for (const field of allowedFields) {
         if (field in req.body)
             update[field] = req.body[field];
@@ -725,7 +887,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             createdAt: item?.createdAt ? new Date(item.createdAt) : new Date(),
         }));
     }
-    if (CLOSED_STATUSES.includes(String(req.body.status))) {
+    if (complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(req.body.status))) {
         update.closedAt = serverNow;
     }
     else {
@@ -744,9 +906,11 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             district: req.body.district ?? existing.district,
             priority: req.body.priority ?? existing.priority,
             l1Sla: existing.l1Sla,
-            forceAssign: Boolean(req.body.forceAssign),
             preferredEngineerName: req.body.reassignEngineerName ?? req.body.engineerName,
         });
+        if (assignment.blockedMessage) {
+            return (0, http_1.fail)(res, assignment.blockedMessage, 400);
+        }
         Object.assign(update, assignment);
     }
     const requestedAssignToId = normalizeText(req.body.assignToEngineerId);
@@ -761,26 +925,36 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         const target = candidates.find((candidate) => candidate.id === requestedAssignToId);
         if (!target)
             return (0, http_1.fail)(res, "Selected engineer not found", 404);
-        const activeCount = await activeTicketCountForEngineer(target.id, existing.id);
-        if (!req.body.forceAssign && activeCount >= MAX_ACTIVE_SERVICE_TICKETS) {
-            return (0, http_1.fail)(res, `${target.name} already has ${MAX_ACTIVE_SERVICE_TICKETS} active tickets`, 400);
+        const counts = await engineerTicketCounts(target.id, target.name, existing.id);
+        if (counts.activeCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS && counts.waitingCount >= complaintRules_1.MAX_WAITING_LOBBY_TICKETS) {
+            return (0, http_1.fail)(res, complaintRules_1.ENGINEER_CAPACITY_MESSAGE, 400);
         }
-        const statusByLevel = {
-            L1: "Assigned to Engineer",
-            L2: "Escalated to L2",
-            L3: "Escalated to L3",
-        };
-        Object.assign(update, {
-            escalationLevel: level,
-            assignmentStatus: "Assigned",
-            assignedEngineerId: target.id,
-            assignedEngineerName: target.name,
-            activeTicketCountAtAssignment: activeCount,
-            status: req.body.status ?? statusByLevel[level],
-            slaPaused: false,
-            waitingSince: undefined,
-            queuePosition: undefined,
+        const assignment = await buildServiceAssignment({
+            level,
+            issueDescription: existing.issueDescription,
+            siteLocation: req.body.siteLocation ?? existing.siteLocation,
+            region: req.body.region ?? existing.region,
+            state: req.body.state ?? existing.state,
+            district: req.body.district ?? existing.district,
+            priority: req.body.priority ?? existing.priority,
+            l1Sla: existing.l1Sla,
+            preferredEngineerId: target.id,
+            preferredEngineerName: target.name,
+            preferredEngineerEmail: target.email,
+            excludeComplaintId: existing.id,
         });
+        if (assignment.blockedMessage) {
+            return (0, http_1.fail)(res, assignment.blockedMessage, 400);
+        }
+        Object.assign(update, assignment);
+        if (assignment.assignmentStatus === "Waiting") {
+            if (level === "L2" && !req.body.status) {
+                update.status = "Waiting Lobby";
+            }
+            else if (level === "L3" && !req.body.status) {
+                update.status = "Waiting Lobby";
+            }
+        }
     }
     else {
         const targetLevel = req.body.status === "Escalated to L2" || req.body.escalationLevel === "L2"
@@ -788,7 +962,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             : req.body.status === "Escalated to L3" || req.body.escalationLevel === "L3"
                 ? "L3"
                 : undefined;
-        if (targetLevel && !CLOSED_STATUSES.includes(String(update.status))) {
+        if (targetLevel && !complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(update.status))) {
             const assignment = await buildServiceAssignment({
                 level: targetLevel,
                 issueDescription: req.body.issueDescription ?? existing.issueDescription,
@@ -796,31 +970,203 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
                 region: req.body.region ?? existing.region,
                 priority: req.body.priority ?? existing.priority,
                 l1Sla: existing.l1Sla,
-                forceAssign: Boolean(req.body.forceAssign),
                 preferredEngineerId: req.body.preferredEngineerId,
                 preferredEngineerName: req.body.preferredEngineerName ?? req.body.engineerName,
                 excludeComplaintId: existing.id,
             });
+            if (assignment.blockedMessage) {
+                return (0, http_1.fail)(res, assignment.blockedMessage, 400);
+            }
             Object.assign(update, assignment);
         }
+    }
+    const desiredStatus = String(req.body.status ?? update.status ?? existing.status);
+    const wantsOnsiteAssignment = Boolean(req.body.sendForOnsite) || desiredStatus === "Assigned for Onsite";
+    const wantsL3ReplacementReview = Boolean(req.body.escalateReplacementToL3) || desiredStatus === "Pending L3 Approval";
+    const wantsDispatchApproval = Boolean(req.body.sendReplacementRequest) || desiredStatus === "Awaiting Dispatch" || desiredStatus === "Replacement Requested";
+    if (wantsOnsiteAssignment) {
+        const onsiteEngineerId = normalizeText(req.body.siteVisitEngineerId ?? update.siteVisitEngineerId ?? existing.siteVisitEngineerId);
+        const onsiteEngineerName = normalizeText(req.body.siteVisitEngineerName ?? update.siteVisitEngineerName ?? existing.siteVisitEngineerName ?? req.body.engineerName ?? update.engineerName ?? existing.engineerName);
+        if (!onsiteEngineerId && !onsiteEngineerName) {
+            return (0, http_1.fail)(res, "Onsite engineer selection is required", 400);
+        }
+        const onsiteCounts = await engineerTicketCounts(onsiteEngineerId || onsiteEngineerName, onsiteEngineerName, existing.id);
+        if (onsiteCounts.activeCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
+            return (0, http_1.fail)(res, complaintRules_1.ONSITE_CAPACITY_MESSAGE, 400);
+        }
+        const sparePartsInput = Array.isArray(req.body.siteVisitSpareParts) ? req.body.siteVisitSpareParts : [];
+        const onsiteSpareParts = sparePartsInput
+            .map((part, index) => {
+            const name = normalizeText(part?.name ?? part?.sparePartName ?? part?.partName);
+            const quantity = Number(part?.quantity);
+            if (!name || !Number.isFinite(quantity) || quantity <= 0)
+                return null;
+            return {
+                id: normalizeText(part?.id) || `${serverNow.getTime()}-${index}`,
+                name,
+                quantity,
+                notes: normalizeText(part?.notes) || undefined,
+            };
+        })
+            .filter(Boolean);
+        update.siteVisitRequired = true;
+        update.siteVisitEngineerId = onsiteEngineerId || undefined;
+        update.siteVisitEngineerName = onsiteEngineerName || undefined;
+        update.siteVisitRequestedById = req.body.siteVisitRequestedById ?? user.userId;
+        update.siteVisitRequestedByName = req.body.siteVisitRequestedByName ?? user.name ?? user.email;
+        update.siteVisitRequestedByRole = req.body.siteVisitRequestedByRole ?? user.role;
+        update.siteVisitRequestedAt = req.body.siteVisitRequestedAt ? new Date(req.body.siteVisitRequestedAt) : serverNow;
+        update.siteVisitRemarks = normalizeText(req.body.siteVisitRemarks ?? update.siteVisitRemarks ?? existing.siteVisitRemarks) || undefined;
+        update.siteVisitSpareParts = onsiteSpareParts;
+        update.siteVisitAssignedById = user.userId;
+        update.siteVisitAssignedByName = user.name ?? user.email;
+        update.siteVisitAssignedByRole = user.role;
+        update.engineerName = onsiteEngineerName || undefined;
+        update.assignmentStatus = "Assigned";
+        update.status = "Assigned for Onsite";
+        update.slaPaused = false;
+        update.waitingSince = undefined;
+        update.queuePosition = undefined;
+        workflowHistory.push(createWorkflowHistoryEvent({
+            action: "Assigned for onsite",
+            fromStatus: existing.status,
+            toStatus: "Assigned for Onsite",
+            user,
+            note: onsiteSpareParts.length
+                ? `Onsite request assigned to ${onsiteEngineerName || onsiteEngineerId} with ${onsiteSpareParts.length} spare part(s).`
+                : `Onsite request assigned to ${onsiteEngineerName || onsiteEngineerId}.`,
+        }));
+        if (onsiteEngineerId) {
+            extraNotifications.push({
+                id: (0, id_1.generateId)(),
+                type: "complaint_workflow_updated",
+                title: "Onsite request assigned",
+                body: `${existing.productSerialNo || "No serial"} assigned for onsite visit.`,
+                entityType: "complaint",
+                entityId: existing.id,
+                meta: {
+                    status: "Assigned for Onsite",
+                    onsiteEngineerId,
+                    onsiteEngineerName,
+                    siteVisitSpareParts: onsiteSpareParts,
+                    siteVisitRemarks: update.siteVisitRemarks,
+                },
+                audienceUserIds: [onsiteEngineerId],
+                readBy: [],
+                createdBy: user.userId,
+                createdAt: serverNow,
+            });
+        }
+    }
+    if (wantsL3ReplacementReview) {
+        const replacementReason = normalizeText(req.body.replacementReason ?? update.replacementReason ?? existing.replacementReason);
+        const replacementRemarks = normalizeText(req.body.replacementRemarks ?? update.replacementRemarks ?? existing.replacementRemarks);
+        const replacementImages = Array.isArray(req.body.replacementRequestImages) ? req.body.replacementRequestImages : [];
+        update.replacementRecommended = true;
+        update.replacementReason = replacementReason || undefined;
+        update.replacementRemarks = replacementRemarks || undefined;
+        update.replacementRequestImages = replacementImages.length ? replacementImages : undefined;
+        update.replacementRequestedById = req.body.replacementRequestedById ?? user.userId;
+        update.replacementRequestedByName = req.body.replacementRequestedByName ?? user.name ?? user.email;
+        update.replacementRequestedByRole = req.body.replacementRequestedByRole ?? user.role;
+        update.replacementRequestedAt = req.body.replacementRequestedAt ? new Date(req.body.replacementRequestedAt) : serverNow;
+        update.status = "Pending L3 Approval";
+        workflowHistory.push(createWorkflowHistoryEvent({
+            action: "Escalated replacement to L3",
+            fromStatus: existing.status,
+            toStatus: "Pending L3 Approval",
+            user,
+            note: replacementReason || replacementRemarks || "Replacement review requested by onsite engineer.",
+        }));
+        extraNotifications.push({
+            id: (0, id_1.generateId)(),
+            type: "complaint_workflow_updated",
+            title: "Replacement review pending",
+            body: `${existing.productSerialNo || "No serial"} requires L3 review.`,
+            entityType: "complaint",
+            entityId: existing.id,
+            meta: {
+                status: "Pending L3 Approval",
+                replacementReason,
+                replacementRemarks,
+            },
+            audienceRoles: ["L3 Advanced OEM Support"],
+            readBy: [],
+            createdBy: user.userId,
+            createdAt: serverNow,
+        });
+    }
+    if (wantsDispatchApproval) {
+        update.replacementRecommended = true;
+        update.replacementApprovalStatus = "Approved";
+        update.replacementApprovedById = req.body.replacementApprovedById ?? user.userId;
+        update.replacementApprovedByName = req.body.replacementApprovedByName ?? user.name ?? user.email;
+        update.replacementApprovedByRole = req.body.replacementApprovedByRole ?? user.role;
+        update.replacementApprovedAt = req.body.replacementApprovedAt ? new Date(req.body.replacementApprovedAt) : serverNow;
+        update.replacementRequestedById = update.replacementRequestedById ?? existing.replacementRequestedById ?? user.userId;
+        update.replacementRequestedByName = update.replacementRequestedByName ?? existing.replacementRequestedByName ?? user.name ?? user.email;
+        update.replacementRequestedByRole = update.replacementRequestedByRole ?? existing.replacementRequestedByRole ?? user.role;
+        update.replacementRequestedAt = update.replacementRequestedAt ?? existing.replacementRequestedAt ?? serverNow;
+        update.status = "Awaiting Dispatch";
+        workflowHistory.push(createWorkflowHistoryEvent({
+            action: "Approved replacement request",
+            fromStatus: existing.status,
+            toStatus: "Awaiting Dispatch",
+            user,
+            note: "Approved replacement request forwarded to Dispatch Team.",
+        }));
+        extraNotifications.push({
+            id: (0, id_1.generateId)(),
+            type: "complaint_workflow_updated",
+            title: "Replacement request approved",
+            body: `${existing.productSerialNo || "No serial"} sent to Dispatch Team.`,
+            entityType: "complaint",
+            entityId: existing.id,
+            meta: {
+                status: "Awaiting Dispatch",
+                replacementApprovalStatus: "Approved",
+                replacementRequestedByName: update.replacementRequestedByName,
+            },
+            audienceRoles: ["Dispatch"],
+            readBy: [],
+            createdBy: user.userId,
+            createdAt: serverNow,
+        });
     }
     if (req.body.status === "Escalated to L2" || req.body.status === "Escalated to L3") {
         update.escalatedById = req.body.escalatedById ?? user.userId;
         update.escalatedByName = req.body.escalatedByName ?? user.email;
         update.escalatedByRole = req.body.escalatedByRole ?? user.role;
         update.escalatedAt = new Date();
+        workflowHistory.push(createWorkflowHistoryEvent({
+            action: req.body.status === "Escalated to L2" ? "Escalated to L2" : "Escalated to L3",
+            fromStatus: existing.status,
+            toStatus: String(req.body.status),
+            user,
+            note: `Ticket escalated to ${req.body.status === "Escalated to L2" ? "L2" : "L3"}.`,
+        }));
     }
-    await c.complaints.updateOne({ id }, { $set: update });
-    if (CLOSED_STATUSES.includes(String(update.status))) {
+    await c.complaints.updateOne({ id }, workflowHistory.length
+        ? { $set: update, $push: { workflowHistory: { $each: workflowHistory } } }
+        : { $set: update });
+    for (const notification of extraNotifications) {
         try {
-            await releaseNextWaitingTicket();
+            await c.notifications.insertOne(notification);
+        }
+        catch (err) {
+            console.warn("Failed to insert workflow notification:", err instanceof Error ? err.message : String(err));
+        }
+    }
+    if (complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(update.status)) && (0, complaintRules_1.isActiveWorkComplaint)(existing)) {
+        try {
+            await releaseNextWaitingTicket(existing.assignedEngineerId, existing.assignedEngineerName, normalizeServiceLevel(existing.escalationLevel));
         }
         catch (err) {
             console.warn("Failed to release next waiting ticket:", err instanceof Error ? err.message : String(err));
         }
     }
     const updated = await c.complaints.findOne({ id });
-    if (updated && req.body.notifyAdminOnCompletion && CLOSED_STATUSES.includes(String(update.status))) {
+    if (updated && req.body.notifyAdminOnCompletion && complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(update.status))) {
         try {
             const notification = {
                 id: (0, id_1.generateId)(),

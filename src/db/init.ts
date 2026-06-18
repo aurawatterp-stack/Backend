@@ -2,6 +2,7 @@ import type { Collection, Document } from "mongodb";
 
 import { getCollections } from "./collections";
 import { DEFAULT_ROLE_PERMISSIONS } from "../rbac";
+import { CLOSED_COMPLAINT_STATUSES, normalizeComplaintSerialKey } from "../utils/complaintRules";
 import { generateId } from "../utils/id";
 import type { SystemRoleName } from "../types";
 
@@ -73,6 +74,31 @@ export async function initDatabase() {
   await ensureIndex(c.notifications, { createdAt: -1 });
   await ensureIndex(c.notifications, { audienceRoles: 1 });
   await ensureIndex(c.notifications, { audienceUserIds: 1 });
+
+  const complaintsWithSerial = await c.complaints
+    .find({ productSerialNo: { $type: "string" } }, { projection: { id: 1, productSerialNo: 1, productSerialNoKey: 1 } })
+    .toArray();
+  await Promise.all(
+    complaintsWithSerial.map((complaint) => c.complaints.updateOne(
+      { id: complaint.id },
+      {
+        $set: {
+          productSerialNoKey: normalizeComplaintSerialKey(complaint.productSerialNo),
+        },
+      }
+    ))
+  );
+  await c.complaints.createIndex(
+    { productSerialNoKey: 1 },
+    {
+      unique: true,
+      background: true,
+      partialFilterExpression: {
+        productSerialNoKey: { $type: "string" },
+        status: { $nin: [...CLOSED_COMPLAINT_STATUSES] },
+      },
+    }
+  );
 
   // Seed system roles (insert-only; never overwrite admin customizations).
   const now = new Date();

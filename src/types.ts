@@ -266,7 +266,7 @@ export type Sale = {
   piAttachmentUrl?: string;
   expectedDispatchDate?: Date;
   confirmedDispatchDate?: Date;
-  dispatchStatus?: "Planned" | "Ready" | "Final Dispatch" | "Delivered";
+  dispatchStatus?: "Planned" | "Ready" | "Final Dispatch" | "Delivered" | "Dispatched";
   courierDocketNo?: string;
   courierDocketAttachmentName?: string;
   courierDocketAttachmentUrl?: string;
@@ -314,10 +314,14 @@ export type ComplaintStatus =
   | "Open at Aurawatt"
   | "Waiting Lobby"
   | "Assigned to Engineer"
+  | "Assigned for Onsite"
   | "In Progress at Aurawatt"
   | "Escalated to L2"
   | "Escalated to L3"
+  | "Pending L3 Approval"
   | "Spare Requested"
+  | "Replacement Requested"
+  | "Awaiting Dispatch"
   | "Dispatch in Progress"
   | "Resolved by Aurawatt"
   | "Pending with Suppliers"
@@ -371,10 +375,30 @@ export type ComplaintProgressUpdate = {
   createdAt: Date;
 };
 
+export type ComplaintWorkflowEvent = {
+  id: string;
+  action: string;
+  fromStatus?: string;
+  toStatus: string;
+  by: string;
+  byName?: string;
+  byRole?: string;
+  at: Date;
+  note?: string;
+};
+
+export type SparePartRequirement = {
+  id: string;
+  name: string;
+  quantity: number;
+  notes?: string;
+};
+
 export type Complaint = {
   id: string;
   type: ComplaintType;
   productSerialNo?: string;
+  productSerialNoKey?: string;
   customerId?: string;
   customerName?: string;
   customerPhone?: string;
@@ -446,12 +470,30 @@ export type Complaint = {
   dispatchPlan?: string;
   siteVisitRequired?: boolean;
   siteVisitEngineerId?: string;
+  siteVisitEngineerName?: string;
+  siteVisitRequestedById?: string;
+  siteVisitRequestedByName?: string;
+  siteVisitRequestedByRole?: string;
+  siteVisitRequestedAt?: Date;
+  siteVisitRemarks?: string;
+  siteVisitSpareParts?: SparePartRequirement[];
   siteVisitScheduledDate?: Date;
   siteVisitAssignedById?: string;
   siteVisitAssignedByName?: string;
   siteVisitAssignedByRole?: string;
   engineerName?: string;
   l3SupportRequired?: boolean;
+  replacementReason?: string;
+  replacementRemarks?: string;
+  replacementRequestImages?: InspectionAttachment[];
+  replacementRequestedById?: string;
+  replacementRequestedByName?: string;
+  replacementRequestedByRole?: string;
+  replacementRequestedAt?: Date;
+  replacementApprovedById?: string;
+  replacementApprovedByName?: string;
+  replacementApprovedByRole?: string;
+  replacementApprovedAt?: Date;
   finalResolution?: string;
   clientFeedback?: string;
   closureReport?: string;
@@ -463,6 +505,7 @@ export type Complaint = {
   raisedBy: string;
   createdAt: Date;
   updatedAt: Date;
+  workflowHistory?: ComplaintWorkflowEvent[];
 };
 
 export type Distributor = {
@@ -482,6 +525,7 @@ export type NotificationType =
   | "raw_material_received"
   | "manufactured_created"
   | "complaint_created"
+  | "complaint_workflow_updated"
   | "complaint_completed"
   | "customer_registration_requested"
   | "user_registered";

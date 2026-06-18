@@ -3,6 +3,7 @@ Object.defineProperty(exports, "__esModule", { value: true });
 exports.initDatabase = initDatabase;
 const collections_1 = require("./collections");
 const rbac_1 = require("../rbac");
+const complaintRules_1 = require("../utils/complaintRules");
 const id_1 = require("../utils/id");
 async function ensureUniqueIndex(col, fields) {
     await col.createIndex(fields, { unique: true, background: true });
@@ -63,6 +64,22 @@ async function initDatabase() {
     await ensureIndex(c.notifications, { createdAt: -1 });
     await ensureIndex(c.notifications, { audienceRoles: 1 });
     await ensureIndex(c.notifications, { audienceUserIds: 1 });
+    const complaintsWithSerial = await c.complaints
+        .find({ productSerialNo: { $type: "string" } }, { projection: { id: 1, productSerialNo: 1, productSerialNoKey: 1 } })
+        .toArray();
+    await Promise.all(complaintsWithSerial.map((complaint) => c.complaints.updateOne({ id: complaint.id }, {
+        $set: {
+            productSerialNoKey: (0, complaintRules_1.normalizeComplaintSerialKey)(complaint.productSerialNo),
+        },
+    })));
+    await c.complaints.createIndex({ productSerialNoKey: 1 }, {
+        unique: true,
+        background: true,
+        partialFilterExpression: {
+            productSerialNoKey: { $type: "string" },
+            status: { $nin: [...complaintRules_1.CLOSED_COMPLAINT_STATUSES] },
+        },
+    });
     // Seed system roles (insert-only; never overwrite admin customizations).
     const now = new Date();
     for (const name of Object.keys(rbac_1.DEFAULT_ROLE_PERMISSIONS)) {

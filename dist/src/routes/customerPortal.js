@@ -7,8 +7,8 @@ const express_1 = __importDefault(require("express"));
 const collections_1 = require("../db/collections");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
+const complaintRules_1 = require("../utils/complaintRules");
 const router = express_1.default.Router();
-const MAX_ACTIVE_TICKETS_PER_ENGINEER = 5;
 const STANDARD_WARRANTY_MONTHS = 60;
 const PORTAL_SERVICE_REGIONS = [
     { name: "NCR", keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"], engineerEmail: "l1.rohit@avavbusiness.com", engineerName: "Rohit Sharma", backupEngineerName: "Amit Verma" },
@@ -136,15 +136,25 @@ async function assignPortalTicket(issueDescription, input) {
     const priority = derivePriority(issueDescription);
     const now = new Date();
     const activeCount = await c.complaints.countDocuments({
-        assignedEngineerId,
+        $or: [{ assignedEngineerId }, { assignedEngineerName }],
         status: { $in: PORTAL_ACTIVE_STATUSES },
     });
-    if (activeCount >= MAX_ACTIVE_TICKETS_PER_ENGINEER) {
-        const queuePosition = (await c.complaints.countDocuments({ region: region.name, assignmentStatus: "Waiting", status: "Waiting Lobby" })) + 1;
+    const waitingCount = await c.complaints.countDocuments({
+        $or: [{ assignedEngineerId }, { assignedEngineerName }],
+        assignmentStatus: "Waiting",
+        status: "Waiting Lobby",
+    });
+    if (activeCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS && waitingCount >= complaintRules_1.MAX_WAITING_LOBBY_TICKETS) {
+        return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+    }
+    if (activeCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
+        const queuePosition = waitingCount + 1;
         return {
             region: region.name,
             priority,
             assignmentStatus: "Waiting",
+            assignedEngineerId,
+            assignedEngineerName,
             backupEngineerName: region.backupEngineerName,
             waitingSince: now,
             slaPaused: true,
@@ -161,7 +171,7 @@ async function assignPortalTicket(issueDescription, input) {
         backupEngineerName: region.backupEngineerName,
         activeTicketCountAtAssignment: activeCount,
         slaStartedAt: now,
-        slaDueAt: new Date(now.getTime() + (priority === "Emergency" ? 2 : 4) * 60 * 60 * 1000),
+        slaDueAt: new Date(now.getTime() + 4 * 60 * 60 * 1000),
         slaPaused: false,
         status: "Assigned to Engineer",
     };
@@ -195,14 +205,12 @@ async function resolveInvoiceServiceDetails(serialNumber, manufactured) {
     const district = inferDistrict(invoiceAddress, sale?.stateRegion, customer?.stateRegion);
     const warrantyStatus = calculateWarrantyStatus(manufactured.soldDate ?? sale?.saleDate);
     return {
-        taxInvoiceNo: sale?.referenceNo ?? manufactured.invoiceNo,
-        taxInvoiceDate: sale?.saleDate,
+        productName: product?.series ?? product?.model ?? manufactured.productId,
+        productModel: product?.model ?? manufactured.productId,
         state,
         district,
         region: mapPortalRegion(regionSource).name,
-        dealerName: firstText(sale?.dealerName, customer?.name, sale?.unregisteredCustomerName, sale?.customerName),
         warrantyStatus,
-        productModel: product?.model ?? manufactured.productId,
         customer,
         sale,
         invoiceAddress,
@@ -225,22 +233,18 @@ router.post("/login", async (req, res) => {
     const customer = manufactured.customerId
         ? await c.customers.findOne({ id: manufactured.customerId }, { projection: { id: 1, name: 1, phone: 1, email: 1 } })
         : null;
+    const activeComplaint = await c.complaints.findOne({
+        productSerialNoKey: (0, complaintRules_1.normalizeComplaintSerialKey)(serialNumber),
+        status: { $nin: [...complaintRules_1.CLOSED_COMPLAINT_STATUSES] },
+    }, { projection: { id: 1, status: 1 } });
     return (0, http_1.ok)(res, {
         session: {
             serialNumber: manufactured.serialNumber,
             productId: manufactured.productId,
+            productName: invoiceDetails.productName,
+            productModel: invoiceDetails.productModel,
             soldDate: manufactured.soldDate,
             customerId: manufactured.customerId,
-        },
-        invoice: {
-            taxInvoiceNo: invoiceDetails.taxInvoiceNo,
-            taxInvoiceDate: invoiceDetails.taxInvoiceDate,
-            state: invoiceDetails.state,
-            district: invoiceDetails.district,
-            region: invoiceDetails.region,
-            dealerName: invoiceDetails.dealerName,
-            warrantyStatus: invoiceDetails.warrantyStatus,
-            productModel: invoiceDetails.productModel,
         },
         customer: customer
             ? {
@@ -248,6 +252,13 @@ router.post("/login", async (req, res) => {
                 name: customer.name,
                 phone: customer.phone,
                 email: customer.email,
+            }
+            : null,
+        activeComplaint: activeComplaint
+            ? {
+                id: activeComplaint.id,
+                status: activeComplaint.status,
+                message: complaintRules_1.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE,
             }
             : null,
     });
@@ -263,13 +274,25 @@ router.post("/complaints", async (req, res) => {
     const customerName = String(req.body.customerName ?? "").trim();
     const customerEmail = String(req.body.customerEmail ?? "").trim().toLowerCase();
     const issueDescription = String(req.body.issueDescription ?? "").trim();
+    const state = String(req.body.state ?? "").trim();
+    const district = String(req.body.district ?? "").trim();
     if (!serialNumber || !mobile || !issueDescription) {
         return (0, http_1.fail)(res, "Serial number, mobile number and issue description are required");
+    }
+    if (!state || !district) {
+        return (0, http_1.fail)(res, "State and district are required");
     }
     const manufactured = await findManufacturedBySerial(serialNumber);
     if (!manufactured)
         return (0, http_1.fail)(res, "Serial number not found", 404);
     const invoiceDetails = await resolveInvoiceServiceDetails(serialNumber, manufactured);
+    const activeDuplicate = await c.complaints.findOne({
+        productSerialNoKey: (0, complaintRules_1.normalizeComplaintSerialKey)(serialNumber),
+        status: { $nin: [...complaintRules_1.CLOSED_COMPLAINT_STATUSES] },
+    });
+    if (activeDuplicate) {
+        return (0, http_1.fail)(res, complaintRules_1.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE, 409);
+    }
     const linkedCustomer = invoiceDetails.customer;
     const siteLocation = String(req.body.siteLocation ?? invoiceDetails.invoiceAddress ?? linkedCustomer?.address ?? "").trim();
     if (!linkedCustomer && (!customerName || !mobile)) {
@@ -277,15 +300,19 @@ router.post("/complaints", async (req, res) => {
     }
     const now = new Date();
     const assignment = await assignPortalTicket(issueDescription, {
-        location: invoiceDetails.region || siteLocation,
-        state: invoiceDetails.state,
-        district: invoiceDetails.district,
+        location: `${state} ${district} ${siteLocation}`,
+        state,
+        district,
     });
+    if (assignment.blockedMessage) {
+        return (0, http_1.fail)(res, assignment.blockedMessage, 400);
+    }
     const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured.customerPhones);
     const complaint = {
         id: (0, id_1.generateId)(),
         type: "Consumer",
         productSerialNo: serialNumber,
+        productSerialNoKey: (0, complaintRules_1.normalizeComplaintSerialKey)(serialNumber),
         customerId: linkedCustomer?.id ?? manufactured.customerId,
         customerName: customerName || linkedCustomer?.name,
         customerPhone: mobile,
@@ -300,16 +327,13 @@ router.post("/complaints", async (req, res) => {
         issueDescription,
         ticketSource: "Link",
         l1Sla: "4 Hours",
-        dealerName: invoiceDetails.dealerName,
         siteLocation: siteLocation || undefined,
-        state: invoiceDetails.state,
-        district: invoiceDetails.district,
+        state,
+        district,
         region: assignment.region,
         priority: assignment.priority,
         warrantyStatus: invoiceDetails.warrantyStatus,
         productModel: invoiceDetails.productModel,
-        taxInvoiceNo: invoiceDetails.taxInvoiceNo,
-        taxInvoiceDate: invoiceDetails.taxInvoiceDate ? new Date(invoiceDetails.taxInvoiceDate) : undefined,
         assignmentStatus: assignment.assignmentStatus,
         assignedEngineerId: assignment.assignedEngineerId,
         assignedEngineerName: assignment.assignedEngineerName,
@@ -326,7 +350,7 @@ router.post("/complaints", async (req, res) => {
         spareInventoryStatus: "Not Required",
         siteVisitRequired: false,
         l3SupportRequired: false,
-        status: assignment.status,
+        status: (assignment.status ?? "Open at Aurawatt"),
         raisedBy: "customer-portal",
         createdAt: now,
         updatedAt: now,
@@ -371,9 +395,6 @@ router.post("/complaints", async (req, res) => {
         status: complaint.status,
         productSerialNo: complaint.productSerialNo,
         dateOfComplaint: complaint.dateOfComplaint,
-        region: complaint.region,
-        assignedEngineerName: complaint.assignedEngineerName,
-        warrantyStatus: complaint.warrantyStatus,
     }, 201);
 });
 exports.default = router;
