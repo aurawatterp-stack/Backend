@@ -7,19 +7,20 @@ const express_1 = __importDefault(require("express"));
 const collections_1 = require("../db/collections");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
+const engineerAssignments_1 = require("../services/engineerAssignments");
 const complaintRules_1 = require("../utils/complaintRules");
 const router = express_1.default.Router();
 const STANDARD_WARRANTY_MONTHS = 60;
 const PORTAL_SERVICE_REGIONS = [
-    { name: "NCR", keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"], engineerEmail: "l1.rohit@avavbusiness.com", engineerName: "Rohit Sharma", backupEngineerName: "Amit Verma" },
-    { name: "UP", keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"], engineerEmail: "l1.rahul@avavbusiness.com", engineerName: "Rahul Sharma", backupEngineerName: "Aman Singh" },
-    { name: "Rajasthan", keywords: ["jaipur", "ajmer", "rajasthan", "udaipur", "jodhpur"], engineerEmail: "l1.deepak.verma@avavbusiness.com", engineerName: "Deepak Verma", backupEngineerName: "Deepak Meena" },
-    { name: "Punjab", keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"], engineerEmail: "l1.rohit@avavbusiness.com", engineerName: "Rohit Sharma", backupEngineerName: "Amit Verma" },
+    { name: "NCR", keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"], engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush", backupEngineerName: "Prashant Noida" },
+    { name: "UP", keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"], engineerEmail: "l1.neeraj@avavbusiness.com", engineerName: "Neeraj", backupEngineerName: "Naveen Maurya" },
+    { name: "Rajasthan", keywords: ["jaipur", "ajmer", "rajasthan", "udaipur", "jodhpur"], engineerEmail: "l1.prashant.singh@avavbusiness.com", engineerName: "Prashant Singh", backupEngineerName: "Pradeep" },
+    { name: "Punjab", keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"], engineerEmail: "l1.nitin@avavbusiness.com", engineerName: "Nitin", backupEngineerName: "Swastik" },
 ];
 const PORTAL_DISTRICT_L1_ENGINEER_MAPPING = [
-    { state: "Uttar Pradesh", district: "Ghaziabad", engineerEmail: "l1.rahul@avavbusiness.com", engineerName: "Rahul Sharma" },
-    { state: "Uttar Pradesh", district: "Noida", engineerEmail: "l1.aman@avavbusiness.com", engineerName: "Aman Singh" },
-    { state: "Rajasthan", district: "Jaipur", engineerEmail: "l1.deepak.verma@avavbusiness.com", engineerName: "Deepak Verma" },
+    { state: "Uttar Pradesh", district: "Ghaziabad", engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush" },
+    { state: "Uttar Pradesh", district: "Noida", engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush" },
+    { state: "Rajasthan", district: "Jaipur", engineerEmail: "l1.prashant.singh@avavbusiness.com", engineerName: "Prashant Singh" },
 ];
 const PORTAL_ACTIVE_STATUSES = ["Assigned to Engineer", "In Progress at Aurawatt", "Escalated to L2", "Escalated to L3", "Spare Requested", "Dispatch in Progress"];
 const STATE_HINTS = [
@@ -128,11 +129,13 @@ function calculateWarrantyStatus(soldDate) {
 async function assignPortalTicket(issueDescription, input) {
     const c = await (0, collections_1.getCollections)();
     const region = mapPortalRegion(input.location);
-    const mappedEngineer = mappedPortalL1EngineerForDistrict(input.state, input.district);
-    const targetEngineer = mappedEngineer ?? region;
-    const engineer = await c.users.findOne({ email: targetEngineer.engineerEmail, role: "L1 Engineer", isActive: { $ne: false } }, { projection: { id: 1, name: 1 } });
-    const assignedEngineerId = engineer?.id ?? targetEngineer.engineerEmail;
-    const assignedEngineerName = engineer?.name ?? targetEngineer.engineerName;
+    const assignment = input.state && input.district ? await (0, engineerAssignments_1.resolveAssignmentByStateDistrict)(String(input.state), String(input.district)) : null;
+    const targetEngineer = assignment?.l1Engineer
+        ? { id: assignment.l1Engineer.id, name: assignment.l1Engineer.name, backupEngineerName: assignment.backupEngineer?.name }
+        : mappedPortalL1EngineerForDistrict(input.state, input.district) ?? region;
+    const engineer = await c.engineerMasters.findOne({ $or: [{ id: targetEngineer.id }, { name: targetEngineer.name }], role: "L1", isActive: { $ne: false } }, { projection: { id: 1, name: 1 } });
+    const assignedEngineerId = engineer?.id ?? targetEngineer.id ?? targetEngineer.engineerEmail ?? targetEngineer.name;
+    const assignedEngineerName = engineer?.name ?? targetEngineer.name ?? targetEngineer.engineerName;
     const priority = derivePriority(issueDescription);
     const now = new Date();
     const activeCount = await c.complaints.countDocuments({
@@ -155,7 +158,7 @@ async function assignPortalTicket(issueDescription, input) {
             assignmentStatus: "Waiting",
             assignedEngineerId,
             assignedEngineerName,
-            backupEngineerName: region.backupEngineerName,
+            backupEngineerName: assignment?.backupEngineer?.name ?? region.backupEngineerName,
             waitingSince: now,
             slaPaused: true,
             queuePosition,
@@ -168,7 +171,7 @@ async function assignPortalTicket(issueDescription, input) {
         assignmentStatus: "Assigned",
         assignedEngineerId,
         assignedEngineerName,
-        backupEngineerName: region.backupEngineerName,
+        backupEngineerName: assignment?.backupEngineer?.name ?? region.backupEngineerName,
         activeTicketCountAtAssignment: activeCount,
         slaStartedAt: now,
         slaDueAt: new Date(now.getTime() + 4 * 60 * 60 * 1000),

@@ -108,6 +108,55 @@ export type Role = {
   updatedAt: Date;
 };
 
+export type EngineerRole = "L1" | "L2" | "L3" | "Backup";
+
+export type EngineerMaster = {
+  id: string;
+  name: string;
+  email?: string;
+  mobile?: string;
+  role: EngineerRole;
+  isActive?: boolean;
+  createdAt: Date;
+  updatedAt: Date;
+};
+
+export type EngineerAssignment = {
+  id: string;
+  state: string;
+  district: string;
+  l1EngineerId: string;
+  l2EngineerId: string;
+  l1BackupEngineerId: string;
+  source?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy?: string;
+  updatedBy?: string;
+};
+
+export type TicketLoad = {
+  id: string;
+  engineerId: string;
+  activeCount: number;
+  waitingCount: number;
+  updatedAt: Date;
+};
+
+export type EngineerAssignmentAudit = {
+  id: string;
+  assignmentId: string;
+  action: "created" | "updated" | "deleted" | "imported";
+  state?: string;
+  district?: string;
+  before?: Partial<EngineerAssignment>;
+  after?: Partial<EngineerAssignment>;
+  note?: string;
+  by?: string;
+  byName?: string;
+  createdAt: Date;
+};
+
 export type CustomerType = "Distributor" | "Individual";
 export type CustomerStatus = "Active" | "Inactive";
 export type CustomerDocument = {

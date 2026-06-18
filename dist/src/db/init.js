@@ -5,6 +5,7 @@ const collections_1 = require("./collections");
 const rbac_1 = require("../rbac");
 const complaintRules_1 = require("../utils/complaintRules");
 const id_1 = require("../utils/id");
+const engineerAssignments_1 = require("../services/engineerAssignments");
 async function ensureUniqueIndex(col, fields) {
     await col.createIndex(fields, { unique: true, background: true });
 }
@@ -13,7 +14,14 @@ async function ensureSparseUniqueIndex(col, fields) {
     const indexes = await col.indexes();
     const existing = indexes.find((index) => index.name === targetName);
     if (existing && !existing.sparse) {
-        await col.dropIndex(targetName);
+        try {
+            await col.dropIndex(targetName);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (!message.includes("index not found"))
+                throw err;
+        }
     }
     await col.createIndex(fields, { unique: true, sparse: true, background: true });
 }
@@ -38,7 +46,14 @@ async function dropIndexIfExists(col, fields) {
     const targetName = Object.entries(fields).map(([key, value]) => `${key}_${value}`).join("_");
     const indexes = await col.indexes();
     if (indexes.some((index) => index.name === targetName)) {
-        await col.dropIndex(targetName);
+        try {
+            await col.dropIndex(targetName);
+        }
+        catch (err) {
+            const message = err instanceof Error ? err.message : String(err);
+            if (!message.includes("index not found"))
+                throw err;
+        }
     }
 }
 function isLegacyTerminalComplaintStatus(status) {
@@ -93,6 +108,17 @@ async function initDatabase() {
     await ensureUniqueIndex(c.roles, { id: 1 });
     await ensureUniqueIndex(c.roles, { name: 1 });
     await ensureIndex(c.roles, { updatedAt: -1 });
+    await ensureUniqueIndex(c.engineerMasters, { id: 1 });
+    await ensureIndex(c.engineerMasters, { role: 1 });
+    await ensureIndex(c.engineerMasters, { name: 1 });
+    await ensureUniqueIndex(c.engineerAssignments, { id: 1 });
+    await ensureUniqueIndex(c.engineerAssignments, { state: 1, district: 1 });
+    await ensureIndex(c.engineerAssignments, { state: 1 });
+    await ensureIndex(c.engineerAssignments, { district: 1 });
+    await ensureUniqueIndex(c.ticketLoads, { id: 1 });
+    await ensureUniqueIndex(c.ticketLoads, { engineerId: 1 });
+    await ensureIndex(c.engineerAssignmentAudit, { createdAt: -1 });
+    await ensureIndex(c.engineerAssignmentAudit, { assignmentId: 1 });
     await ensureUniqueIndex(c.pendingRegistrations, { id: 1 });
     await ensureUniqueIndex(c.pendingRegistrations, { email: 1 });
     await ensureUniqueIndex(c.pendingCustomerRegistrations, { id: 1 });
@@ -107,6 +133,10 @@ async function initDatabase() {
         c.complaints,
         c.distributors,
         c.notifications,
+        c.engineerMasters,
+        c.engineerAssignments,
+        c.ticketLoads,
+        c.engineerAssignmentAudit,
     ]) {
         await ensureUniqueIndex(col, { id: 1 });
     }
@@ -151,6 +181,7 @@ async function initDatabase() {
             console.warn("DB init: complaint serial index still has legacy duplicates after repair; starting without enforcing the index on boot.");
         }
     }
+    await (0, engineerAssignments_1.seedEngineerAssignmentsIfEmpty)();
     // Seed system roles (insert-only; never overwrite admin customizations).
     const now = new Date();
     for (const name of Object.keys(rbac_1.DEFAULT_ROLE_PERMISSIONS)) {

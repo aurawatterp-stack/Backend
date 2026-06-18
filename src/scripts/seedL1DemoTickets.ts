@@ -6,15 +6,15 @@ import type { Complaint } from "../types";
 const FLOW_TAG = "demo-l1-15-ticket-flow";
 
 const engineers = {
-  rohit: {
-    id: "u-l1-rohit",
-    name: "Rohit Sharma",
-    backupName: "Amit Verma",
+  piyush: {
+    id: "u-l1-piyush",
+    name: "Piyush",
+    backupName: "Prashant Noida",
   },
-  amit: {
-    id: "u-l1-amit",
-    name: "Amit Verma",
-    backupName: "Rohit Sharma",
+  neeraj: {
+    id: "u-l1-neeraj",
+    name: "Neeraj",
+    backupName: "Naveen Maurya",
   },
 };
 
@@ -28,7 +28,7 @@ function hoursFromNow(hours: number) {
 
 function buildAssignedTicket(input: {
   index: number;
-  engineer: typeof engineers.rohit;
+  engineer: typeof engineers.piyush;
   activeTicketCountAtAssignment: number;
   customerName: string;
   city: string;
@@ -75,7 +75,7 @@ function buildAssignedTicket(input: {
 
 function buildWaitingTicket(input: {
   queuePosition: number;
-  overflowFromEngineer: typeof engineers.rohit;
+  overflowFromEngineer: typeof engineers.piyush;
   customerName: string;
   city: string;
   issue: string;
@@ -130,13 +130,13 @@ async function main() {
   const now = new Date();
 
   await c.users.updateMany(
-    { id: { $in: [engineers.rohit.id, engineers.amit.id] } },
+    { id: { $in: [engineers.piyush.id, engineers.neeraj.id] } },
     { $set: { isActive: true, updatedAt: now } }
   );
 
   const deleteResult = await c.complaints.deleteMany({ trackingNotes: FLOW_TAG });
 
-  const rohitAssigned = [
+  const piyushAssigned = [
     ["Om Solar Farm", "Noida", "Inverter trips during morning startup", "High"],
     ["Shakti Cold Storage", "Ghaziabad", "Battery charging is unstable", "Medium"],
     ["Greenline Foods", "Delhi", "Plant down after grid fluctuation", "Emergency"],
@@ -144,7 +144,7 @@ async function main() {
     ["Suryam Residency", "Gurugram", "System not starting after reset", "High"],
   ].map(([customerName, city, issue, priority], index) => buildAssignedTicket({
     index: index + 1,
-    engineer: engineers.rohit,
+    engineer: engineers.piyush,
     activeTicketCountAtAssignment: index,
     customerName,
     city,
@@ -152,7 +152,7 @@ async function main() {
     priority: priority as Complaint["priority"],
   }));
 
-  const rohitWaiting = [
+  const piyushWaiting = [
     ["Rudra Textiles", "Noida", "Export reading not updating", "Low"],
     ["Bright Hospital", "Delhi", "Repeated AC voltage alarm", "High"],
     ["Arya School", "Ghaziabad", "Battery backup lower than expected", "Medium"],
@@ -160,14 +160,14 @@ async function main() {
     ["City Mall", "Faridabad", "Hardware fault shown on display", "Medium"],
   ].map(([customerName, city, issue, priority], index) => buildWaitingTicket({
     queuePosition: index + 1,
-    overflowFromEngineer: engineers.rohit,
+    overflowFromEngineer: engineers.piyush,
     customerName,
     city,
     issue,
     priority: priority as Complaint["priority"],
   }));
 
-  const amitAssigned = [
+  const neerajAssigned = [
     ["Lotus Apartments", "Delhi", "Inverter showing grid relay error", "High"],
     ["Nexus Office Park", "Noida", "Battery communication warning", "Medium"],
     ["Kanha Dairy", "Ghaziabad", "System down after firmware update", "High"],
@@ -175,7 +175,7 @@ async function main() {
     ["Alpha Residency", "Gurugram", "Remote monitoring offline", "Low"],
   ].map(([customerName, city, issue, priority], index) => buildAssignedTicket({
     index: index + 11,
-    engineer: engineers.amit,
+    engineer: engineers.neeraj,
     activeTicketCountAtAssignment: index,
     customerName,
     city,
@@ -183,14 +183,14 @@ async function main() {
     priority: priority as Complaint["priority"],
   }));
 
-  const tickets = [...rohitAssigned, ...rohitWaiting, ...amitAssigned];
+  const tickets = [...piyushAssigned, ...piyushWaiting, ...neerajAssigned];
   await c.complaints.insertMany(tickets);
 
   console.log(`Deleted ${deleteResult.deletedCount} old L1 demo tickets.`);
   console.log("Inserted 15 L1 demo tickets:");
-  console.log("- Rohit Sharma: 5 active assigned tickets");
-  console.log("- Waiting Lobby: 5 overflow tickets from Rohit Sharma");
-  console.log("- Amit Verma: 5 active assigned tickets");
+  console.log("- Piyush: 5 active assigned tickets");
+  console.log("- Waiting Lobby: 5 overflow tickets from Piyush");
+  console.log("- Neeraj: 5 active assigned tickets");
 
   const client = await getMongoClient();
   await client.close();

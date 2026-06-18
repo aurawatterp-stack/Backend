@@ -4,6 +4,9 @@ import type {
   Complaint,
   Customer,
   Distributor,
+  EngineerAssignment,
+  EngineerAssignmentAudit,
+  EngineerMaster,
   ManufacturedProduct,
   PendingRegistration,
   PendingCustomerRegistration,
@@ -11,6 +14,7 @@ import type {
   RawMaterial,
   Sale,
   SerialEntry,
+  TicketLoad,
   User,
   Notification,
   Role,
@@ -20,6 +24,10 @@ import { getMongoDb } from "./mongo";
 export type Collections = {
   users: Collection<User>;
   roles: Collection<Role>;
+  engineerMasters: Collection<EngineerMaster>;
+  engineerAssignments: Collection<EngineerAssignment>;
+  ticketLoads: Collection<TicketLoad>;
+  engineerAssignmentAudit: Collection<EngineerAssignmentAudit>;
   pendingRegistrations: Collection<PendingRegistration>;
   pendingCustomerRegistrations: Collection<PendingCustomerRegistration>;
   customers: Collection<Customer>;
@@ -38,6 +46,10 @@ export async function getCollections(): Promise<Collections> {
   return {
     users: db.collection<User>("users"),
     roles: db.collection<Role>("roles"),
+    engineerMasters: db.collection<EngineerMaster>("engineer_master"),
+    engineerAssignments: db.collection<EngineerAssignment>("engineer_assignment"),
+    ticketLoads: db.collection<TicketLoad>("ticket_load"),
+    engineerAssignmentAudit: db.collection<EngineerAssignmentAudit>("engineer_assignment_audit"),
     pendingRegistrations: db.collection<PendingRegistration>("pending_registrations"),
     pendingCustomerRegistrations: db.collection<PendingCustomerRegistration>("pending_customer_registrations"),
     customers: db.collection<Customer>("customers"),

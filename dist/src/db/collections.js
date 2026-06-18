@@ -7,6 +7,10 @@ async function getCollections() {
     return {
         users: db.collection("users"),
         roles: db.collection("roles"),
+        engineerMasters: db.collection("engineer_master"),
+        engineerAssignments: db.collection("engineer_assignment"),
+        ticketLoads: db.collection("ticket_load"),
+        engineerAssignmentAudit: db.collection("engineer_assignment_audit"),
         pendingRegistrations: db.collection("pending_registrations"),
         pendingCustomerRegistrations: db.collection("pending_customer_registrations"),
         customers: db.collection("customers"),

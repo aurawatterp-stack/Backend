@@ -10,6 +10,7 @@ const auth_1 = require("../middleware/auth");
 const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
+const engineerAssignments_1 = require("../services/engineerAssignments");
 const complaintRules_1 = require("../utils/complaintRules");
 const router = express_1.default.Router();
 const MAX_INVERTER_PICTURE_BYTES = 5 * 1024 * 1024;
@@ -40,39 +41,39 @@ const SERVICE_REGIONS = [
         name: "NCR",
         keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"],
         engineers: [
-            { id: "eng-ncr-l1", name: "Rohit Sharma" },
-            { id: "eng-ncr-l1b", name: "Amit Verma" },
+            { id: "eng-ncr-l1", name: "Piyush" },
+            { id: "eng-ncr-l1b", name: "Prashant Noida" },
         ],
     },
     {
         name: "UP",
         keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"],
         engineers: [
-            { id: "eng-up-l1", name: "Vikas Yadav" },
-            { id: "eng-up-l1b", name: "Sandeep Singh" },
+            { id: "eng-up-l1", name: "Neeraj" },
+            { id: "eng-up-l1b", name: "Naveen Maurya" },
         ],
     },
     {
         name: "Rajasthan",
         keywords: ["jaipur", "ajmer", "rajasthan", "udaipur", "jodhpur"],
         engineers: [
-            { id: "eng-rj-l1", name: "Mahesh Choudhary" },
-            { id: "eng-rj-l1b", name: "Deepak Meena" },
+            { id: "eng-rj-l1", name: "Prashant Singh" },
+            { id: "eng-rj-l1b", name: "Pradeep" },
         ],
     },
     {
         name: "Punjab",
         keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"],
         engineers: [
-            { id: "eng-pb-l1", name: "Harpreet Singh" },
-            { id: "eng-pb-l1b", name: "Gurpreet Gill" },
+            { id: "eng-pb-l1", name: "Nitin" },
+            { id: "eng-pb-l1b", name: "Swastik" },
         ],
     },
 ];
 const DISTRICT_L1_ENGINEER_MAPPING = [
-    { state: "Uttar Pradesh", district: "Ghaziabad", engineerEmail: "l1.rahul@avavbusiness.com", engineerName: "Rahul Sharma" },
-    { state: "Uttar Pradesh", district: "Noida", engineerEmail: "l1.aman@avavbusiness.com", engineerName: "Aman Singh" },
-    { state: "Rajasthan", district: "Jaipur", engineerEmail: "l1.deepak.verma@avavbusiness.com", engineerName: "Deepak Verma" },
+    { state: "Uttar Pradesh", district: "Ghaziabad", engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush" },
+    { state: "Uttar Pradesh", district: "Noida", engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush" },
+    { state: "Rajasthan", district: "Jaipur", engineerEmail: "l1.prashant.singh@avavbusiness.com", engineerName: "Prashant Singh" },
 ];
 const ACTIVE_ENGINEER_STATUSES = [
     "Assigned to Engineer",
@@ -91,15 +92,17 @@ const SERVICE_ROLE_BY_LEVEL = {
     L3: "L3 Advanced OEM Support",
 };
 const ASSIGNABLE_SERVICE_ENGINEER_EMAILS = new Set([
-    "l1.rohit@avavbusiness.com",
-    "l1.amit@avavbusiness.com",
-    "l1.rahul@avavbusiness.com",
-    "l1.aman@avavbusiness.com",
-    "l1.deepak.verma@avavbusiness.com",
-    "l2.vikas@avavbusiness.com",
-    "l2.sandeep@avavbusiness.com",
+    "l1.piyush@avavbusiness.com",
+    "l1.neeraj@avavbusiness.com",
+    "l1.nitin@avavbusiness.com",
+    "l1.prashant.singh@avavbusiness.com",
+    "l1.ashutosh@avavbusiness.com",
+    "l1.rajat@avavbusiness.com",
+    "l1.swastik@avavbusiness.com",
+    "l1.pradeep@avavbusiness.com",
+    "l2.naveen.maurya@avavbusiness.com",
+    "l2.prashant.noida@avavbusiness.com",
     "l3.mahesh@avavbusiness.com",
-    "l3.deepak@avavbusiness.com",
 ]);
 function normalizeText(value) {
     return String(value ?? "").trim();
@@ -263,14 +266,16 @@ function buildEngineerIdentityFilter(identities) {
 }
 async function serviceEngineers(level) {
     const c = await (0, collections_1.getCollections)();
-    const roles = level
-        ? [SERVICE_ROLE_BY_LEVEL[level]]
-        : Object.values(SERVICE_ROLE_BY_LEVEL);
-    const users = await c.users
-        .find({ role: { $in: roles }, email: { $in: [...ASSIGNABLE_SERVICE_ENGINEER_EMAILS] }, isActive: { $ne: false } }, { projection: { id: 1, name: 1, email: 1, role: 1 } })
+    const roles = level === "L1"
+        ? ["L1", "Backup"]
+        : level
+            ? [level]
+            : ["L1", "L2", "L3", "Backup"];
+    const users = await c.engineerMasters
+        .find({ role: { $in: roles }, isActive: { $ne: false } }, { projection: { id: 1, name: 1, email: 1, role: 1 } })
         .sort({ name: 1 })
         .toArray();
-    return users.map((user) => ({ id: user.id, name: user.name, email: user.email, role: user.role }));
+    return users.map((user) => ({ id: user.id, name: user.name, email: user.email ?? "", role: user.role }));
 }
 async function buildServiceAssignment(input) {
     const regionConfig = input.region ? mapRegion(input.region) : mapRegion(input.siteLocation);
@@ -284,68 +289,116 @@ async function buildServiceAssignment(input) {
     const preferredId = normalizeText(input.preferredEngineerId);
     const preferredName = normalizeText(input.preferredEngineerName).toLowerCase();
     const preferredEmail = normalizeText(input.preferredEngineerEmail).toLowerCase();
-    const districtEngineer = input.level === "L1" ? mappedL1EngineerForDistrict(input.state, input.district) : undefined;
+    const districtAssignment = input.state && input.district ? await (0, engineerAssignments_1.resolveAssignmentByStateDistrict)(String(input.state), String(input.district)) : null;
     const preferredEngineer = (preferredId ? engineerStats.find((item) => item.id === preferredId) : undefined) ??
         (preferredEmail ? engineerStats.find((item) => item.email.toLowerCase() === preferredEmail) : undefined) ??
         (preferredName ? engineerStats.find((item) => item.name.toLowerCase() === preferredName) : undefined);
-    const mappedEngineer = districtEngineer
-        ? engineerStats.find((item) => item.email.toLowerCase() === districtEngineer.engineerEmail.toLowerCase() || item.name.toLowerCase() === districtEngineer.engineerName.toLowerCase())
-        : undefined;
-    const engineer = preferredEngineer ?? mappedEngineer ?? [...engineerStats].sort((a, b) => (a.activeCount - b.activeCount ||
-        a.waitingCount - b.waitingCount ||
-        a.name.localeCompare(b.name)))[0];
-    if (!engineer) {
-        return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
-    }
-    if (preferredEngineer || mappedEngineer) {
-        if (engineer.activeCount < complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
-            // fall through to active assignment below
-        }
-        else if (engineer.waitingCount < complaintRules_1.MAX_WAITING_LOBBY_TICKETS) {
-            // fall through to waiting assignment below
-        }
-        else {
-            return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
-        }
-    }
-    else if (engineer.activeCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS && engineer.waitingCount >= complaintRules_1.MAX_WAITING_LOBBY_TICKETS) {
-        return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
-    }
+    const districtPrimary = input.level === "L1"
+        ? districtAssignment?.l1Engineer
+        : input.level === "L2"
+            ? districtAssignment?.l2Engineer
+            : undefined;
+    const districtBackup = input.level === "L1" ? districtAssignment?.backupEngineer : undefined;
     const slaHours = slaHoursForLevel(input.level);
     const statusByLevel = {
         L1: "Assigned to Engineer",
         L2: "Escalated to L2",
         L3: "Escalated to L3",
     };
-    if (engineer.activeCount < complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
+    const mappedPrimary = districtPrimary
+        ? engineerStats.find((item) => item.id === districtPrimary.id || item.name.toLowerCase() === districtPrimary.name.toLowerCase())
+        : undefined;
+    const mappedBackup = districtBackup
+        ? engineerStats.find((item) => item.id === districtBackup.id || item.name.toLowerCase() === districtBackup.name.toLowerCase())
+        : undefined;
+    function assignmentForEngineer(engineer) {
+        if (engineer.activeCount < complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
+            return {
+                assignedEngineerId: engineer.id,
+                assignedEngineerName: engineer.name,
+                activeTicketCountAtAssignment: engineer.activeCount,
+                assignmentStatus: "Assigned",
+                waitingSince: undefined,
+                slaStartedAt: now,
+                slaDueAt: addHours(now, slaHoursForLevel(input.level)),
+                slaPaused: false,
+                queuePosition: undefined,
+                status: statusByLevel[input.level],
+            };
+        }
+        if (engineer.waitingCount < complaintRules_1.MAX_WAITING_LOBBY_TICKETS) {
+            return {
+                assignedEngineerId: engineer.id,
+                assignedEngineerName: engineer.name,
+                waitingSince: now,
+                assignmentStatus: "Waiting",
+                slaStartedAt: undefined,
+                slaDueAt: undefined,
+                slaPaused: true,
+                queuePosition: engineer.waitingCount + 1,
+                status: "Waiting Lobby",
+            };
+        }
+        return null;
+    }
+    let engineer = preferredEngineer ?? mappedPrimary ?? [...engineerStats].sort((a, b) => (a.activeCount - b.activeCount ||
+        a.waitingCount - b.waitingCount ||
+        a.name.localeCompare(b.name)))[0];
+    if (!engineer) {
+        return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+    }
+    if (mappedPrimary && !preferredEngineer && input.level === "L1") {
+        const primaryAssignment = assignmentForEngineer(engineer);
+        if (primaryAssignment) {
+            return {
+                region: regionConfig.name,
+                priority,
+                escalationLevel: input.level,
+                backupEngineerName: mappedBackup?.name ?? districtBackup?.name,
+                ...primaryAssignment,
+            };
+        }
+        const backupEngineer = mappedBackup ?? [...engineerStats].find((candidate) => candidate.id !== engineer.id);
+        if (!backupEngineer) {
+            return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+        }
+        const backupAssignment = assignmentForEngineer(backupEngineer);
+        if (!backupAssignment) {
+            return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+        }
         return {
             region: regionConfig.name,
             priority,
             escalationLevel: input.level,
-            assignmentStatus: "Assigned",
-            assignedEngineerId: engineer.id,
-            assignedEngineerName: engineer.name,
-            backupEngineerName: engineerStats.find((candidate) => candidate.id !== engineer.id)?.name,
-            activeTicketCountAtAssignment: engineer.activeCount,
-            slaStartedAt: now,
-            slaDueAt: addHours(now, slaHours),
-            slaPaused: false,
-            queuePosition: undefined,
-            status: statusByLevel[input.level],
+            backupEngineerName: backupEngineer.name,
+            ...backupAssignment,
+        };
+    }
+    if (mappedPrimary && !preferredEngineer && input.level === "L2") {
+        const primaryAssignment = assignmentForEngineer(engineer);
+        if (!primaryAssignment) {
+            return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+        }
+        return {
+            region: regionConfig.name,
+            priority,
+            escalationLevel: input.level,
+            backupEngineerName: mappedBackup?.name ?? districtBackup?.name,
+            ...primaryAssignment,
+        };
+    }
+    const genericAssignment = assignmentForEngineer(engineer);
+    if (genericAssignment) {
+        return {
+            region: regionConfig.name,
+            priority,
+            escalationLevel: input.level,
+            backupEngineerName: mappedBackup?.name ?? districtBackup?.name ?? engineerStats.find((candidate) => candidate.id !== engineer.id)?.name,
+            ...genericAssignment,
         };
     }
     return {
-        region: regionConfig.name,
-        priority,
-        escalationLevel: input.level,
-        assignmentStatus: "Waiting",
-        assignedEngineerId: engineer.id,
-        assignedEngineerName: engineer.name,
-        backupEngineerName: engineerStats.find((candidate) => candidate.id !== engineer.id)?.name,
-        waitingSince: now,
-        slaPaused: true,
-        queuePosition: engineer.waitingCount + 1,
-        status: "Waiting Lobby",
+        blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE,
     };
 }
 async function buildAssignment(input) {
@@ -504,6 +557,15 @@ function complaintRoleScope(user) {
             ],
         };
     }
+    if (user.role === "Backup") {
+        return {
+            $or: [
+                { assignedEngineerId: user.userId },
+                ...(user.name ? [{ assignedEngineerName: user.name }] : []),
+                { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
+            ],
+        };
+    }
     if (user.role === "L2 Technical Team") {
         return {
             $or: [
@@ -548,6 +610,11 @@ function canAccessComplaint(user, complaint) {
             (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
             (complaint.siteVisitRequired === true && Boolean(user.name) && (complaint.siteVisitEngineerName === user.name || complaint.engineerName === user.name)) ||
             (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
+            (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1"));
+    }
+    if (user.role === "Backup") {
+        return (complaint.assignedEngineerId === user.userId ||
+            (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1"));
     }
     if (user.role === "L2 Technical Team") {
