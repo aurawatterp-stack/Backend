@@ -34,6 +34,57 @@ async function ensurePartialUniqueStringIndex(col, fields) {
 async function ensureIndex(col, fields) {
     await col.createIndex(fields, { background: true });
 }
+async function dropIndexIfExists(col, fields) {
+    const targetName = Object.entries(fields).map(([key, value]) => `${key}_${value}`).join("_");
+    const indexes = await col.indexes();
+    if (indexes.some((index) => index.name === targetName)) {
+        await col.dropIndex(targetName);
+    }
+}
+function isLegacyTerminalComplaintStatus(status) {
+    const normalized = (0, complaintRules_1.normalizeComplaintSerialKey)(status);
+    return /(^| )(?:closed|complete|completed|cancelled|canceled|rejected|duplicate)( |$)/.test(normalized) || /(^| )resolved( |$)/.test(normalized);
+}
+function shouldClearComplaintSerialKey(complaint) {
+    return Boolean(complaint.closedAt) || (0, complaintRules_1.isClosedComplaintStatus)(complaint.status) || isLegacyTerminalComplaintStatus(complaint.status);
+}
+async function repairComplaintSerialKeyIndex(col) {
+    const complaintsWithSerialKey = await col
+        .find({ productSerialNoKey: { $type: "string" } }, {
+        projection: {
+            id: 1,
+            productSerialNoKey: 1,
+            status: 1,
+            closedAt: 1,
+            updatedAt: 1,
+            createdAt: 1,
+        },
+    })
+        .sort({ productSerialNoKey: 1, updatedAt: -1, createdAt: -1, id: 1 })
+        .toArray();
+    const duplicateComplaintIds = [];
+    const seenSerialKeys = new Set();
+    for (const complaint of complaintsWithSerialKey) {
+        const serialKey = (0, complaintRules_1.normalizeComplaintSerialKey)(complaint.productSerialNoKey);
+        if (!serialKey || shouldClearComplaintSerialKey(complaint)) {
+            duplicateComplaintIds.push(complaint.id);
+            continue;
+        }
+        if (seenSerialKeys.has(serialKey)) {
+            duplicateComplaintIds.push(complaint.id);
+            continue;
+        }
+        seenSerialKeys.add(serialKey);
+    }
+    if (duplicateComplaintIds.length) {
+        console.warn(`DB init: clearing productSerialNoKey from ${duplicateComplaintIds.length} complaint(s) so the unique serial index can be built.`);
+        await col.updateMany({ id: { $in: duplicateComplaintIds } }, { $unset: { productSerialNoKey: "" } });
+    }
+}
+function isDuplicateKeyError(err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return message.includes("E11000 duplicate key error") || (typeof err === "object" && err !== null && "code" in err && err.code === 11000);
+}
 async function initDatabase() {
     const c = await (0, collections_1.getCollections)();
     await ensureUniqueIndex(c.users, { id: 1 });
@@ -64,6 +115,10 @@ async function initDatabase() {
     await ensureIndex(c.notifications, { createdAt: -1 });
     await ensureIndex(c.notifications, { audienceRoles: 1 });
     await ensureIndex(c.notifications, { audienceUserIds: 1 });
+    // Remove any pre-existing complaint serial index before we normalize old rows.
+    // Otherwise the cleanup writes can trip the unique constraint before we get a
+    // chance to repair the collection.
+    await dropIndexIfExists(c.complaints, { productSerialNoKey: 1 });
     const complaintsWithSerial = await c.complaints
         .find({ productSerialNo: { $type: "string" } }, { projection: { id: 1, productSerialNo: 1, productSerialNoKey: 1 } })
         .toArray();
@@ -72,14 +127,30 @@ async function initDatabase() {
             productSerialNoKey: (0, complaintRules_1.normalizeComplaintSerialKey)(complaint.productSerialNo),
         },
     })));
-    await c.complaints.createIndex({ productSerialNoKey: 1 }, {
-        unique: true,
-        background: true,
-        partialFilterExpression: {
-            productSerialNoKey: { $type: "string" },
-            status: { $nin: [...complaintRules_1.CLOSED_COMPLAINT_STATUSES] },
-        },
+    await c.complaints.updateMany({
+        status: { $in: [...complaintRules_1.CLOSED_COMPLAINT_STATUSES] },
+        productSerialNoKey: { $type: "string" },
+    }, {
+        $unset: { productSerialNoKey: "" },
     });
+    await repairComplaintSerialKeyIndex(c.complaints);
+    try {
+        await ensureSparseUniqueIndex(c.complaints, { productSerialNoKey: 1 });
+    }
+    catch (err) {
+        if (!isDuplicateKeyError(err))
+            throw err;
+        console.warn("DB init: retrying complaint serial index build after repairing duplicate keys.");
+        try {
+            await repairComplaintSerialKeyIndex(c.complaints);
+            await ensureSparseUniqueIndex(c.complaints, { productSerialNoKey: 1 });
+        }
+        catch (retryErr) {
+            if (!isDuplicateKeyError(retryErr))
+                throw retryErr;
+            console.warn("DB init: complaint serial index still has legacy duplicates after repair; starting without enforcing the index on boot.");
+        }
+    }
     // Seed system roles (insert-only; never overwrite admin customizations).
     const now = new Date();
     for (const name of Object.keys(rbac_1.DEFAULT_ROLE_PERMISSIONS)) {

@@ -15,6 +15,7 @@ import {
   MAX_WAITING_LOBBY_TICKETS,
   ONSITE_CAPACITY_MESSAGE,
   isActiveWorkComplaint,
+  isClosedComplaintStatus,
   normalizeComplaintSerialKey,
 } from "../utils/complaintRules";
 
@@ -184,6 +185,14 @@ function sortForL1Queue(rows: Complaint[]) {
   ));
 }
 
+function sortWaitingLobbyTickets(rows: Complaint[]) {
+  return [...rows].sort((a, b) => (
+    new Date(a.waitingSince ?? a.createdAt).getTime() - new Date(b.waitingSince ?? b.createdAt).getTime() ||
+    new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() ||
+    a.id.localeCompare(b.id)
+  ));
+}
+
 function derivePriority(issueDescription: unknown, requestedPriority?: unknown) {
   const requested = normalizeText(requestedPriority);
   if (["Low", "Medium", "High", "Emergency"].includes(requested)) return requested as Complaint["priority"];
@@ -213,6 +222,10 @@ function isL1InspectionValid(inspection: Complaint["l1Inspection"] | undefined) 
 }
 
 type ServiceLevel = keyof typeof SERVICE_ROLE_BY_LEVEL;
+type EngineerIdentity = {
+  engineerId?: string;
+  engineerName?: string;
+};
 
 function normalizeServiceLevel(value: unknown): ServiceLevel {
   const raw = normalizeText(value).toUpperCase();
@@ -249,6 +262,30 @@ async function engineerTicketCounts(engineerId: string, engineerName?: string, e
     c.complaints.countDocuments(waitingFilter),
   ]);
   return { activeCount, waitingCount };
+}
+
+function buildEngineerIdentityFilter(identities: EngineerIdentity[]) {
+  const or: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  for (const identity of identities) {
+    const engineerId = normalizeText(identity.engineerId);
+    const engineerName = normalizeText(identity.engineerName);
+    if (engineerId) {
+      const key = `id:${engineerId}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        or.push({ assignedEngineerId: engineerId });
+      }
+    }
+    if (engineerName) {
+      const key = `name:${engineerName.toLowerCase()}`;
+      if (!seen.has(key)) {
+        seen.add(key);
+        or.push({ assignedEngineerName: engineerName });
+      }
+    }
+  }
+  return or;
 }
 
 async function serviceEngineers(level?: ServiceLevel) {
@@ -377,66 +414,90 @@ async function buildAssignment(input: {
   return buildServiceAssignment({ ...input, level: "L1" });
 }
 
-async function releaseNextWaitingTicket(engineerId?: string, engineerName?: string, level?: ServiceLevel) {
+async function releaseNextWaitingTicket(identities: EngineerIdentity[] = [], level?: ServiceLevel) {
   const c = await getCollections();
   const filter: Record<string, unknown> = { assignmentStatus: "Waiting", status: "Waiting Lobby" };
   if (level) filter.escalationLevel = level;
-  if (engineerId || engineerName) {
-    filter.$or = [
-      ...(engineerId ? [{ assignedEngineerId: engineerId }] : []),
-      ...(engineerName ? [{ assignedEngineerName: engineerName }] : []),
-    ];
+  const identityFilter = buildEngineerIdentityFilter(identities);
+  if (identityFilter.length) {
+    filter.$or = identityFilter;
   }
-  let waiting = await c.complaints.find(filter).toArray();
-  if (!waiting.length && level) {
-    waiting = await c.complaints.find({
-      assignmentStatus: "Waiting",
-      status: "Waiting Lobby",
-      escalationLevel: level,
-    }).toArray();
+  while (true) {
+    const waiting = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
+    if (!waiting.length) break;
+    const next = waiting[0];
+    const nextLevel = normalizeServiceLevel(next.escalationLevel);
+    const assignment = await buildServiceAssignment({
+      level: nextLevel,
+      issueDescription: next.issueDescription,
+      siteLocation: next.siteLocation,
+      region: next.region,
+      state: next.state,
+      district: next.district,
+      priority: next.priority,
+      l1Sla: next.l1Sla,
+      excludeComplaintId: next.id,
+      preferredEngineerId: next.assignedEngineerId,
+      preferredEngineerName: next.assignedEngineerName,
+      preferredEngineerEmail: next.assignedEngineerId,
+    });
+    if (assignment.blockedMessage || assignment.assignmentStatus !== "Assigned") break;
+    const promotedAt = new Date();
+    await c.complaints.updateOne(
+      { id: next.id },
+      {
+        $set: {
+          ...assignment,
+          updatedAt: promotedAt,
+        },
+        $unset: { waitingSince: "", queuePosition: "" },
+      }
+    );
   }
-  const next = waiting
-    .sort((a, b) => new Date(a.waitingSince ?? a.createdAt).getTime() - new Date(b.waitingSince ?? b.createdAt).getTime() || priorityRank(a.priority) - priorityRank(b.priority))[0];
-  if (!next) return;
-  const nextLevel = normalizeServiceLevel(next.escalationLevel);
-  const assignment = await buildServiceAssignment({
-    level: nextLevel,
-    issueDescription: next.issueDescription,
-    siteLocation: next.siteLocation,
-    region: next.region,
-    state: next.state,
-    district: next.district,
-    priority: next.priority,
-    l1Sla: next.l1Sla,
-    excludeComplaintId: next.id,
-    preferredEngineerId: next.assignedEngineerId,
-    preferredEngineerName: next.assignedEngineerName,
-    preferredEngineerEmail: next.assignedEngineerId,
-  });
-  if (assignment.blockedMessage || assignment.assignmentStatus !== "Assigned") return;
-  const promotedAt = new Date();
-  const queuePeers = waiting.filter((complaint) => (
-    complaint.id !== next.id && (
-      (next.assignedEngineerId && complaint.assignedEngineerId === next.assignedEngineerId) ||
-      (next.assignedEngineerName && complaint.assignedEngineerName === next.assignedEngineerName)
-    )
-  ));
+
+  const remaining = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
   await Promise.all(
-    queuePeers.map((complaint, index) => c.complaints.updateOne(
+    remaining.map((complaint, index) => c.complaints.updateOne(
       { id: complaint.id },
-      { $set: { queuePosition: index + 1, updatedAt: promotedAt } }
+      { $set: { queuePosition: index + 1, updatedAt: new Date() } }
     ))
   );
-  await c.complaints.updateOne(
-    { id: next.id },
-    {
-      $set: {
-        ...assignment,
-        updatedAt: promotedAt,
+}
+
+async function rebalanceWaitingLobby() {
+  const c = await getCollections();
+  const waitingRows = await c.complaints
+    .find(
+      {
+        assignmentStatus: "Waiting",
+        status: "Waiting Lobby",
+        $or: [
+          { assignedEngineerId: { $type: "string" } },
+          { assignedEngineerName: { $type: "string" } },
+        ],
       },
-      $unset: { waitingSince: "", queuePosition: "" },
-    }
-  );
+      {
+        projection: {
+          assignedEngineerId: 1,
+          assignedEngineerName: 1,
+          escalationLevel: 1,
+        },
+      }
+    )
+    .sort({ waitingSince: 1, createdAt: 1, id: 1 })
+    .toArray();
+
+  const seen = new Set<string>();
+  for (const complaint of waitingRows) {
+    const engineerId = normalizeText(complaint.assignedEngineerId);
+    const engineerName = normalizeText(complaint.assignedEngineerName);
+    if (!engineerId && !engineerName) continue;
+    const level = normalizeServiceLevel(complaint.escalationLevel);
+    const key = `${level}:${engineerId || `name:${engineerName.toLowerCase()}`}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    await releaseNextWaitingTicket([{ engineerId: engineerId || undefined, engineerName: engineerName || undefined }], level);
+  }
 }
 
 async function rebalanceL1Queue() {
@@ -595,6 +656,7 @@ router.get("/", authenticate, requireAnyPermission("complaints:consumer", "compl
   }
   if (!view && (!type || String(type).toLowerCase() === "consumer")) {
     await rebalanceL1Queue();
+    await rebalanceWaitingLobby();
   }
   const filter: Record<string, unknown> = {};
   if (type) filter.type = type;
@@ -829,11 +891,12 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     return fail(res, assignment.blockedMessage, 400);
   }
 
+  const complaintStatus = assignment?.status ?? "Open at Aurawatt";
   const complaint: Complaint = {
     id: generateId(),
     type,
     productSerialNo,
-    productSerialNoKey: productSerialNoKey || undefined,
+    productSerialNoKey: isClosedComplaintStatus(complaintStatus) ? undefined : productSerialNoKey || undefined,
     customerName,
     customerPhone: mobileNumber ? String(mobileNumber) : undefined,
     rawMaterialId,
@@ -927,7 +990,7 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     closedByName,
     closedByRole,
     closedAt: closedAt ? new Date(closedAt) : undefined,
-    status: assignment?.status ?? "Open at Aurawatt",
+    status: complaintStatus,
     raisedBy: user.userId,
     createdAt: new Date(),
     updatedAt: new Date(),
@@ -959,16 +1022,43 @@ router.put(
   const { status } = req.body;
   if (!status) return fail(res, "status is required");
   const updatedAt = new Date();
+  const nextStatus = String(status);
+  const escalationReason = normalizeText(req.body.escalationReason);
+  const escalationNotes = normalizeText(req.body.escalationNotes);
+  const noteSuffix = nextStatus === "Escalated to L3"
+    ? [
+        escalationReason ? `Reason: ${escalationReason}.` : "",
+        escalationNotes ? `Notes: ${escalationNotes}.` : "",
+      ].filter(Boolean).join(" ")
+    : "";
   const event = createWorkflowHistoryEvent({
     action: "Status updated",
     fromStatus: existing.status,
-    toStatus: String(status),
+    toStatus: nextStatus,
     user,
-    note: `Status changed to ${status}.`,
+    note: `Status changed to ${nextStatus}.${noteSuffix ? ` ${noteSuffix}` : ""}`,
   });
-  await c.complaints.updateOne({ id }, { $set: { status, updatedAt }, $push: { workflowHistory: event } });
-  if (CLOSED_COMPLAINT_STATUSES.includes(String(status) as (typeof CLOSED_COMPLAINT_STATUSES)[number]) && isActiveWorkComplaint(existing)) {
-    await releaseNextWaitingTicket(existing.assignedEngineerId, existing.assignedEngineerName, normalizeServiceLevel(existing.escalationLevel));
+  const statusUpdate: Record<string, unknown> = {
+    status,
+    updatedAt,
+  };
+  const nextSerialKey = isClosedComplaintStatus(nextStatus) ? undefined : normalizeComplaintSerialKey(existing.productSerialNo) || undefined;
+  if (nextSerialKey) {
+    statusUpdate.productSerialNoKey = nextSerialKey;
+  }
+  await c.complaints.updateOne(
+    { id },
+    {
+      $set: statusUpdate,
+      ...(isClosedComplaintStatus(nextStatus) ? { $unset: { productSerialNoKey: "" } } : {}),
+      $push: { workflowHistory: event },
+    }
+  );
+  if (isClosedComplaintStatus(nextStatus) && isActiveWorkComplaint(existing)) {
+    await releaseNextWaitingTicket([
+      { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
+      { engineerId: user.userId, engineerName: user.name },
+    ], normalizeServiceLevel(existing.escalationLevel));
   }
   return ok(res, { ...existing, status, updatedAt });
   }
@@ -1013,6 +1103,8 @@ router.put(
       "escalatedByName",
       "escalatedByRole",
       "escalatedAt",
+      "escalationReason",
+      "escalationNotes",
       "initialAction",
       "trackingNotes",
       "escalationLevel",
@@ -1369,12 +1461,31 @@ router.put(
       }));
     }
 
-    await c.complaints.updateOne(
-      { id },
-      workflowHistory.length
-        ? { $set: update, $push: { workflowHistory: { $each: workflowHistory } } }
-        : { $set: update }
-    );
+    const isClosed = isClosedComplaintStatus(desiredStatus);
+    const nextSerialKey = isClosed ? undefined : normalizeComplaintSerialKey(existing.productSerialNo) || undefined;
+    const setDoc: Record<string, unknown> = { ...update };
+    if (nextSerialKey) {
+      setDoc.productSerialNoKey = nextSerialKey;
+    }
+    const updateDoc: Record<string, unknown> = workflowHistory.length
+      ? { $set: setDoc, $push: { workflowHistory: { $each: workflowHistory } } }
+      : { $set: setDoc };
+    if (isClosed) {
+      updateDoc.$unset = { productSerialNoKey: "" };
+    }
+
+    await c.complaints.updateOne({ id }, updateDoc as any);
+
+    if (isClosed && isActiveWorkComplaint(existing)) {
+      try {
+        await releaseNextWaitingTicket([
+          { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
+          { engineerId: user.userId, engineerName: user.name },
+        ], normalizeServiceLevel(existing.escalationLevel));
+      } catch (err) {
+        console.warn("Failed to release next waiting ticket from service close:", err instanceof Error ? err.message : String(err));
+      }
+    }
 
     for (const notification of extraNotifications) {
       try {
@@ -1386,7 +1497,10 @@ router.put(
 
     if (CLOSED_COMPLAINT_STATUSES.includes(String(update.status) as (typeof CLOSED_COMPLAINT_STATUSES)[number]) && isActiveWorkComplaint(existing)) {
       try {
-        await releaseNextWaitingTicket(existing.assignedEngineerId, existing.assignedEngineerName, normalizeServiceLevel(existing.escalationLevel));
+        await releaseNextWaitingTicket([
+          { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
+          { engineerId: user.userId, engineerName: user.name },
+        ], normalizeServiceLevel(existing.escalationLevel));
       } catch (err) {
         console.warn("Failed to release next waiting ticket:", err instanceof Error ? err.message : String(err));
       }

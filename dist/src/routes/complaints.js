@@ -169,6 +169,11 @@ function sortForL1Queue(rows) {
         priorityRank(a.priority) - priorityRank(b.priority) ||
         new Date(a.slaDueAt ?? a.createdAt).getTime() - new Date(b.slaDueAt ?? b.createdAt).getTime()));
 }
+function sortWaitingLobbyTickets(rows) {
+    return [...rows].sort((a, b) => (new Date(a.waitingSince ?? a.createdAt).getTime() - new Date(b.waitingSince ?? b.createdAt).getTime() ||
+        new Date(a.createdAt).getTime() - new Date(b.createdAt).getTime() ||
+        a.id.localeCompare(b.id)));
+}
 function derivePriority(issueDescription, requestedPriority) {
     const requested = normalizeText(requestedPriority);
     if (["Low", "Medium", "High", "Emergency"].includes(requested))
@@ -232,6 +237,29 @@ async function engineerTicketCounts(engineerId, engineerName, excludeComplaintId
         c.complaints.countDocuments(waitingFilter),
     ]);
     return { activeCount, waitingCount };
+}
+function buildEngineerIdentityFilter(identities) {
+    const or = [];
+    const seen = new Set();
+    for (const identity of identities) {
+        const engineerId = normalizeText(identity.engineerId);
+        const engineerName = normalizeText(identity.engineerName);
+        if (engineerId) {
+            const key = `id:${engineerId}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                or.push({ assignedEngineerId: engineerId });
+            }
+        }
+        if (engineerName) {
+            const key = `name:${engineerName.toLowerCase()}`;
+            if (!seen.has(key)) {
+                seen.add(key);
+                or.push({ assignedEngineerName: engineerName });
+            }
+        }
+    }
+    return or;
 }
 async function serviceEngineers(level) {
     const c = await (0, collections_1.getCollections)();
@@ -323,57 +351,81 @@ async function buildServiceAssignment(input) {
 async function buildAssignment(input) {
     return buildServiceAssignment({ ...input, level: "L1" });
 }
-async function releaseNextWaitingTicket(engineerId, engineerName, level) {
+async function releaseNextWaitingTicket(identities = [], level) {
     const c = await (0, collections_1.getCollections)();
     const filter = { assignmentStatus: "Waiting", status: "Waiting Lobby" };
     if (level)
         filter.escalationLevel = level;
-    if (engineerId || engineerName) {
-        filter.$or = [
-            ...(engineerId ? [{ assignedEngineerId: engineerId }] : []),
-            ...(engineerName ? [{ assignedEngineerName: engineerName }] : []),
-        ];
+    const identityFilter = buildEngineerIdentityFilter(identities);
+    if (identityFilter.length) {
+        filter.$or = identityFilter;
     }
-    let waiting = await c.complaints.find(filter).toArray();
-    if (!waiting.length && level) {
-        waiting = await c.complaints.find({
-            assignmentStatus: "Waiting",
-            status: "Waiting Lobby",
-            escalationLevel: level,
-        }).toArray();
+    while (true) {
+        const waiting = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
+        if (!waiting.length)
+            break;
+        const next = waiting[0];
+        const nextLevel = normalizeServiceLevel(next.escalationLevel);
+        const assignment = await buildServiceAssignment({
+            level: nextLevel,
+            issueDescription: next.issueDescription,
+            siteLocation: next.siteLocation,
+            region: next.region,
+            state: next.state,
+            district: next.district,
+            priority: next.priority,
+            l1Sla: next.l1Sla,
+            excludeComplaintId: next.id,
+            preferredEngineerId: next.assignedEngineerId,
+            preferredEngineerName: next.assignedEngineerName,
+            preferredEngineerEmail: next.assignedEngineerId,
+        });
+        if (assignment.blockedMessage || assignment.assignmentStatus !== "Assigned")
+            break;
+        const promotedAt = new Date();
+        await c.complaints.updateOne({ id: next.id }, {
+            $set: {
+                ...assignment,
+                updatedAt: promotedAt,
+            },
+            $unset: { waitingSince: "", queuePosition: "" },
+        });
     }
-    const next = waiting
-        .sort((a, b) => new Date(a.waitingSince ?? a.createdAt).getTime() - new Date(b.waitingSince ?? b.createdAt).getTime() || priorityRank(a.priority) - priorityRank(b.priority))[0];
-    if (!next)
-        return;
-    const nextLevel = normalizeServiceLevel(next.escalationLevel);
-    const assignment = await buildServiceAssignment({
-        level: nextLevel,
-        issueDescription: next.issueDescription,
-        siteLocation: next.siteLocation,
-        region: next.region,
-        state: next.state,
-        district: next.district,
-        priority: next.priority,
-        l1Sla: next.l1Sla,
-        excludeComplaintId: next.id,
-        preferredEngineerId: next.assignedEngineerId,
-        preferredEngineerName: next.assignedEngineerName,
-        preferredEngineerEmail: next.assignedEngineerId,
-    });
-    if (assignment.blockedMessage || assignment.assignmentStatus !== "Assigned")
-        return;
-    const promotedAt = new Date();
-    const queuePeers = waiting.filter((complaint) => (complaint.id !== next.id && ((next.assignedEngineerId && complaint.assignedEngineerId === next.assignedEngineerId) ||
-        (next.assignedEngineerName && complaint.assignedEngineerName === next.assignedEngineerName))));
-    await Promise.all(queuePeers.map((complaint, index) => c.complaints.updateOne({ id: complaint.id }, { $set: { queuePosition: index + 1, updatedAt: promotedAt } })));
-    await c.complaints.updateOne({ id: next.id }, {
-        $set: {
-            ...assignment,
-            updatedAt: promotedAt,
+    const remaining = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
+    await Promise.all(remaining.map((complaint, index) => c.complaints.updateOne({ id: complaint.id }, { $set: { queuePosition: index + 1, updatedAt: new Date() } })));
+}
+async function rebalanceWaitingLobby() {
+    const c = await (0, collections_1.getCollections)();
+    const waitingRows = await c.complaints
+        .find({
+        assignmentStatus: "Waiting",
+        status: "Waiting Lobby",
+        $or: [
+            { assignedEngineerId: { $type: "string" } },
+            { assignedEngineerName: { $type: "string" } },
+        ],
+    }, {
+        projection: {
+            assignedEngineerId: 1,
+            assignedEngineerName: 1,
+            escalationLevel: 1,
         },
-        $unset: { waitingSince: "", queuePosition: "" },
-    });
+    })
+        .sort({ waitingSince: 1, createdAt: 1, id: 1 })
+        .toArray();
+    const seen = new Set();
+    for (const complaint of waitingRows) {
+        const engineerId = normalizeText(complaint.assignedEngineerId);
+        const engineerName = normalizeText(complaint.assignedEngineerName);
+        if (!engineerId && !engineerName)
+            continue;
+        const level = normalizeServiceLevel(complaint.escalationLevel);
+        const key = `${level}:${engineerId || `name:${engineerName.toLowerCase()}`}`;
+        if (seen.has(key))
+            continue;
+        seen.add(key);
+        await releaseNextWaitingTicket([{ engineerId: engineerId || undefined, engineerName: engineerName || undefined }], level);
+    }
 }
 async function rebalanceL1Queue() {
     const c = await (0, collections_1.getCollections)();
@@ -471,6 +523,18 @@ function complaintRoleScope(user) {
     }
     return null;
 }
+function onsiteTrackingScope(user) {
+    if (user.role !== "L2 Technical Team")
+        return null;
+    const or = [{ siteVisitAssignedById: user.userId }];
+    if (user.name) {
+        or.push({ siteVisitAssignedByName: user.name });
+    }
+    return {
+        siteVisitRequired: true,
+        $or: or,
+    };
+}
 function applyComplaintRoleScope(filter, user) {
     const scope = complaintRoleScope(user);
     return scope ? { $and: [filter, scope] } : filter;
@@ -502,20 +566,32 @@ function canAccessComplaint(user, complaint) {
 /** GET /api/complaints — filter by type, status */
 router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, status, page = "1", limit = "20" } = req.query;
+    const { type, status, page = "1", limit = "20", view } = req.query;
     const user = req.user;
     if (type && !requireComplaintTypeAccess(user, type)) {
         return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
     }
-    if (!type || String(type).toLowerCase() === "consumer") {
+    if (!view && (!type || String(type).toLowerCase() === "consumer")) {
         await rebalanceL1Queue();
+        await rebalanceWaitingLobby();
     }
     const filter = {};
     if (type)
         filter.type = type;
     if (status)
         filter.status = status;
-    const scopedFilter = applyComplaintRoleScope(filter, user);
+    const scopedFilter = view === "onsite-tracking"
+        ? (() => {
+            const scope = onsiteTrackingScope(user);
+            if (!scope) {
+                return null;
+            }
+            return { $and: [filter, scope] };
+        })()
+        : applyComplaintRoleScope(filter, user);
+    if (!scopedFilter) {
+        return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
+    }
     const p = Math.max(1, parseInt(page));
     const l = Math.min(100, parseInt(limit));
     const total = await c.complaints.countDocuments(scopedFilter);
@@ -627,11 +703,12 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
     if (assignment?.blockedMessage) {
         return (0, http_1.fail)(res, assignment.blockedMessage, 400);
     }
+    const complaintStatus = assignment?.status ?? "Open at Aurawatt";
     const complaint = {
         id: (0, id_1.generateId)(),
         type,
         productSerialNo,
-        productSerialNoKey: productSerialNoKey || undefined,
+        productSerialNoKey: (0, complaintRules_1.isClosedComplaintStatus)(complaintStatus) ? undefined : productSerialNoKey || undefined,
         customerName,
         customerPhone: mobileNumber ? String(mobileNumber) : undefined,
         rawMaterialId,
@@ -725,7 +802,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         closedByName,
         closedByRole,
         closedAt: closedAt ? new Date(closedAt) : undefined,
-        status: assignment?.status ?? "Open at Aurawatt",
+        status: complaintStatus,
         raisedBy: user.userId,
         createdAt: new Date(),
         updatedAt: new Date(),
@@ -754,16 +831,40 @@ router.put("/:id/status", auth_1.authenticate, (0, auth_1.requireAnyPermission)(
     if (!status)
         return (0, http_1.fail)(res, "status is required");
     const updatedAt = new Date();
+    const nextStatus = String(status);
+    const escalationReason = normalizeText(req.body.escalationReason);
+    const escalationNotes = normalizeText(req.body.escalationNotes);
+    const noteSuffix = nextStatus === "Escalated to L3"
+        ? [
+            escalationReason ? `Reason: ${escalationReason}.` : "",
+            escalationNotes ? `Notes: ${escalationNotes}.` : "",
+        ].filter(Boolean).join(" ")
+        : "";
     const event = createWorkflowHistoryEvent({
         action: "Status updated",
         fromStatus: existing.status,
-        toStatus: String(status),
+        toStatus: nextStatus,
         user,
-        note: `Status changed to ${status}.`,
+        note: `Status changed to ${nextStatus}.${noteSuffix ? ` ${noteSuffix}` : ""}`,
     });
-    await c.complaints.updateOne({ id }, { $set: { status, updatedAt }, $push: { workflowHistory: event } });
-    if (complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(status)) && (0, complaintRules_1.isActiveWorkComplaint)(existing)) {
-        await releaseNextWaitingTicket(existing.assignedEngineerId, existing.assignedEngineerName, normalizeServiceLevel(existing.escalationLevel));
+    const statusUpdate = {
+        status,
+        updatedAt,
+    };
+    const nextSerialKey = (0, complaintRules_1.isClosedComplaintStatus)(nextStatus) ? undefined : (0, complaintRules_1.normalizeComplaintSerialKey)(existing.productSerialNo) || undefined;
+    if (nextSerialKey) {
+        statusUpdate.productSerialNoKey = nextSerialKey;
+    }
+    await c.complaints.updateOne({ id }, {
+        $set: statusUpdate,
+        ...((0, complaintRules_1.isClosedComplaintStatus)(nextStatus) ? { $unset: { productSerialNoKey: "" } } : {}),
+        $push: { workflowHistory: event },
+    });
+    if ((0, complaintRules_1.isClosedComplaintStatus)(nextStatus) && (0, complaintRules_1.isActiveWorkComplaint)(existing)) {
+        await releaseNextWaitingTicket([
+            { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
+            { engineerId: user.userId, engineerName: user.name },
+        ], normalizeServiceLevel(existing.escalationLevel));
     }
     return (0, http_1.ok)(res, { ...existing, status, updatedAt });
 });
@@ -801,6 +902,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "escalatedByName",
         "escalatedByRole",
         "escalatedAt",
+        "escalationReason",
+        "escalationNotes",
         "initialAction",
         "trackingNotes",
         "escalationLevel",
@@ -870,12 +973,16 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     const update = { updatedAt: serverNow, l1InspectionValid };
     const workflowHistory = [];
     const extraNotifications = [];
+    const siteVisitActive = Boolean(req.body.siteVisitRequired ?? existing.siteVisitRequired);
     for (const field of allowedFields) {
         if (field in req.body)
             update[field] = req.body[field];
     }
     if ((req.body.status === "In Progress at Aurawatt" || ("serviceStartedAt" in req.body && req.body.serviceStartedAt)) && !existing.serviceStartedAt) {
         update.serviceStartedAt = serverNow;
+        if (siteVisitActive && !existing.siteVisitAcceptedAt) {
+            update.siteVisitAcceptedAt = serverNow;
+        }
     }
     else {
         delete update.serviceStartedAt;
@@ -889,6 +996,9 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     }
     if (complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(req.body.status))) {
         update.closedAt = serverNow;
+        if (siteVisitActive && !existing.siteVisitCompletedAt) {
+            update.siteVisitCompletedAt = serverNow;
+        }
     }
     else {
         delete update.closedAt;
@@ -1146,9 +1256,30 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             note: `Ticket escalated to ${req.body.status === "Escalated to L2" ? "L2" : "L3"}.`,
         }));
     }
-    await c.complaints.updateOne({ id }, workflowHistory.length
-        ? { $set: update, $push: { workflowHistory: { $each: workflowHistory } } }
-        : { $set: update });
+    const isClosed = (0, complaintRules_1.isClosedComplaintStatus)(desiredStatus);
+    const nextSerialKey = isClosed ? undefined : (0, complaintRules_1.normalizeComplaintSerialKey)(existing.productSerialNo) || undefined;
+    const setDoc = { ...update };
+    if (nextSerialKey) {
+        setDoc.productSerialNoKey = nextSerialKey;
+    }
+    const updateDoc = workflowHistory.length
+        ? { $set: setDoc, $push: { workflowHistory: { $each: workflowHistory } } }
+        : { $set: setDoc };
+    if (isClosed) {
+        updateDoc.$unset = { productSerialNoKey: "" };
+    }
+    await c.complaints.updateOne({ id }, updateDoc);
+    if (isClosed && (0, complaintRules_1.isActiveWorkComplaint)(existing)) {
+        try {
+            await releaseNextWaitingTicket([
+                { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
+                { engineerId: user.userId, engineerName: user.name },
+            ], normalizeServiceLevel(existing.escalationLevel));
+        }
+        catch (err) {
+            console.warn("Failed to release next waiting ticket from service close:", err instanceof Error ? err.message : String(err));
+        }
+    }
     for (const notification of extraNotifications) {
         try {
             await c.notifications.insertOne(notification);
@@ -1159,7 +1290,10 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     }
     if (complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(update.status)) && (0, complaintRules_1.isActiveWorkComplaint)(existing)) {
         try {
-            await releaseNextWaitingTicket(existing.assignedEngineerId, existing.assignedEngineerName, normalizeServiceLevel(existing.escalationLevel));
+            await releaseNextWaitingTicket([
+                { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
+                { engineerId: user.userId, engineerName: user.name },
+            ], normalizeServiceLevel(existing.escalationLevel));
         }
         catch (err) {
             console.warn("Failed to release next waiting ticket:", err instanceof Error ? err.message : String(err));

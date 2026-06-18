@@ -432,6 +432,8 @@ export type Complaint = {
   escalatedByName?: string;
   escalatedByRole?: string;
   escalatedAt?: Date;
+  escalationReason?: string;
+  escalationNotes?: string;
   waitingSince?: Date;
   slaStartedAt?: Date;
   slaDueAt?: Date;
