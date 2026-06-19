@@ -1,7 +1,7 @@
 import type { Complaint } from "../types";
 
 export const MAX_ACTIVE_SERVICE_TICKETS = 5;
-export const MAX_WAITING_LOBBY_TICKETS = 5;
+export const MAX_WAITING_LOBBY_TICKETS = 999999;
 
 export const ACTIVE_TICKET_STATUSES = [
   "New",

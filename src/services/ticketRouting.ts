@@ -14,7 +14,7 @@ export type TicketAssignmentDecision = {
   activeTicketCountAtAssignment: number;
   lobbyTicketCountAtAssignment: number;
   totalTicketCountAtAssignment: number;
-  assignmentStatus: "Assigned";
+  assignmentStatus: "Assigned" | "Waiting";
   status: Complaint["status"];
   slaStartedAt?: Date;
   slaDueAt?: Date;
@@ -66,8 +66,8 @@ async function countEngineerLoad(engineerId: string, engineerName?: string) {
   };
 }
 
-function canAcceptL1TicketStrict(load: { activeTicketCount: number; totalTicketCount: number }) {
-  return load.activeTicketCount < MAX_ACTIVE_SERVICE_TICKETS && load.totalTicketCount < 10;
+function canAcceptL1TicketStrict(load: { activeTicketCount: number; lobbyTicketCount: number }) {
+  return load.activeTicketCount < MAX_ACTIVE_SERVICE_TICKETS || load.lobbyTicketCount < MAX_WAITING_LOBBY_TICKETS;
 }
 
 function buildAssignedComplaintStatus(assignmentType: TicketAssignmentDecision["assignmentType"]) {
@@ -110,56 +110,65 @@ export async function routeCustomerTicketByStateDistrict(input: {
   const l2Load = l2 ? await countEngineerLoad(l2.id, l2.name) : null;
 
   if (primary && primaryLoad && canAcceptL1TicketStrict(primaryLoad)) {
+    const isWaiting = primaryLoad.activeTicketCount >= MAX_ACTIVE_SERVICE_TICKETS;
     return {
       assignmentType: "Primary L1" as const,
-      assignmentReason: "Primary L1 capacity available.",
+      assignmentReason: isWaiting ? "Primary L1 active queue full, placed in waiting lobby." : "Primary L1 capacity available.",
       assignedEngineerId: primary.id,
       assignedEngineerName: primary.name,
       backupEngineerName: backup?.name,
       activeTicketCountAtAssignment: primaryLoad.activeTicketCount,
       lobbyTicketCountAtAssignment: primaryLoad.lobbyTicketCount,
       totalTicketCountAtAssignment: primaryLoad.totalTicketCount,
-      assignmentStatus: "Assigned" as const,
-      status: buildAssignedComplaintStatus("Primary L1") as Complaint["status"],
-      slaStartedAt: new Date(),
-      slaDueAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
-      slaPaused: false,
+      assignmentStatus: isWaiting ? "Waiting" : "Assigned",
+      status: isWaiting ? "Waiting Lobby" : buildAssignedComplaintStatus("Primary L1") as Complaint["status"],
+      slaStartedAt: undefined,
+      slaDueAt: undefined,
+      slaPaused: true,
+      queuePosition: isWaiting ? primaryLoad.lobbyTicketCount + 1 : undefined,
+      waitingSince: isWaiting ? new Date() : undefined,
     } satisfies TicketAssignmentDecision;
   }
 
   if (backup && backupLoad && canAcceptL1TicketStrict(backupLoad)) {
+    const isWaiting = backupLoad.activeTicketCount >= MAX_ACTIVE_SERVICE_TICKETS;
     return {
       assignmentType: "Backup L1" as const,
-      assignmentReason: primary ? "Primary L1 is full; backup capacity is available." : "Primary L1 is unavailable; backup capacity is available.",
+      assignmentReason: isWaiting ? "Backup L1 active queue full, placed in waiting lobby." : (primary ? "Primary L1 is full; backup capacity is available." : "Primary L1 is unavailable; backup capacity is available."),
       assignedEngineerId: backup.id,
       assignedEngineerName: backup.name,
       backupEngineerName: backup.name,
       activeTicketCountAtAssignment: backupLoad.activeTicketCount,
       lobbyTicketCountAtAssignment: backupLoad.lobbyTicketCount,
       totalTicketCountAtAssignment: backupLoad.totalTicketCount,
-      assignmentStatus: "Assigned" as const,
-      status: buildAssignedComplaintStatus("Backup L1") as Complaint["status"],
-      slaStartedAt: new Date(),
-      slaDueAt: new Date(Date.now() + 4 * 60 * 60 * 1000),
-      slaPaused: false,
+      assignmentStatus: isWaiting ? "Waiting" : "Assigned",
+      status: isWaiting ? "Waiting Lobby" : buildAssignedComplaintStatus("Backup L1") as Complaint["status"],
+      slaStartedAt: undefined,
+      slaDueAt: undefined,
+      slaPaused: true,
+      queuePosition: isWaiting ? backupLoad.lobbyTicketCount + 1 : undefined,
+      waitingSince: isWaiting ? new Date() : undefined,
     } satisfies TicketAssignmentDecision;
   }
 
   if (l2 && l2Load) {
+    const isWaiting = l2Load.activeTicketCount >= MAX_ACTIVE_SERVICE_TICKETS;
     return {
       assignmentType: "L2 Escalation" as const,
-      assignmentReason: "Primary L1 and backup L1 are full.",
+      assignmentReason: isWaiting ? "L2 active queue full, placed in waiting lobby." : "Primary L1 and backup L1 are full.",
       assignedEngineerId: l2.id,
       assignedEngineerName: l2.name,
       backupEngineerName: backup?.name,
       activeTicketCountAtAssignment: l2Load.activeTicketCount,
       lobbyTicketCountAtAssignment: l2Load.lobbyTicketCount,
       totalTicketCountAtAssignment: l2Load.totalTicketCount,
-      assignmentStatus: "Assigned" as const,
-      status: buildAssignedComplaintStatus("L2 Escalation") as Complaint["status"],
-      slaStartedAt: new Date(),
-      slaDueAt: new Date(Date.now() + 48 * 60 * 60 * 1000),
-      slaPaused: false,
+      assignmentStatus: isWaiting ? "Waiting" : "Assigned",
+      status: isWaiting ? "Waiting Lobby" : buildAssignedComplaintStatus("L2 Escalation") as Complaint["status"],
+      slaStartedAt: undefined,
+      slaDueAt: undefined,
+      slaPaused: true,
+      queuePosition: isWaiting ? l2Load.lobbyTicketCount + 1 : undefined,
+      waitingSince: isWaiting ? new Date() : undefined,
     } satisfies TicketAssignmentDecision;
   }
 
