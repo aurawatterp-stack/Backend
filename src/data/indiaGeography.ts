@@ -1,5 +1,6 @@
 import geography from "./indiaGeographyData.json";
 
+
 export type IndiaStateDistrictEntry = {
   state: string;
   districts: string[];
