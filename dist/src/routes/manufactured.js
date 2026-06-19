@@ -53,13 +53,64 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory
 /** POST /api/manufactured — record new production */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { productId, serialNumber, mfgDate, status, invoiceNo, paymentStatus, bomUsage } = req.body;
+    const { productId, serialNumber, mfgDate, status, invoiceNo, paymentStatus } = req.body;
     if (!productId || !serialNumber || !mfgDate) {
         return (0, http_1.fail)(res, "productId, serialNumber, mfgDate are required");
     }
     const duplicate = await c.manufactured.findOne({ serialNumber }, { projection: { id: 1 } });
     if (duplicate)
         return (0, http_1.fail)(res, "This serial number already exists");
+    const product = await c.products.findOne({ id: productId });
+    if (!product)
+        return (0, http_1.fail)(res, "Product model not found", 404);
+    const seriesBom = await c.boms.findOne({ series: product.series });
+    const bomUsage = [];
+    if (seriesBom && Array.isArray(seriesBom.items)) {
+        for (const item of seriesBom.items) {
+            if (item.quantity <= 0)
+                continue;
+            const rawMaterials = await c.rawMaterials
+                .find({ productSeriesId: product.series, materialName: item.materialName, quantityAvailable: { $gt: 0 } })
+                .sort({ dateReceived: 1 })
+                .toArray();
+            let remainingRequired = item.quantity;
+            const deductions = [];
+            for (const rm of rawMaterials) {
+                if (remainingRequired <= 0)
+                    break;
+                const available = rm.quantityAvailable;
+                const toDeduct = Math.min(available, remainingRequired);
+                deductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName });
+                remainingRequired -= toDeduct;
+                bomUsage.push({
+                    rawMaterialId: rm.id,
+                    materialName: rm.materialName,
+                    batch: rm.batch,
+                    invoiceNo: rm.referenceNo,
+                    vendorName: rm.vendorName,
+                    quantityUsed: toDeduct,
+                });
+            }
+            if (remainingRequired > 0) {
+                return (0, http_1.fail)(res, `Insufficient stock for Raw Material: ${item.materialName}. Required: ${item.quantity}, Available: ${item.quantity - remainingRequired}`);
+            }
+            for (const d of deductions) {
+                await c.rawMaterials.updateOne({ id: d.id }, { $inc: { quantityAvailable: -d.qty }, $set: { updatedAt: new Date() } });
+                // Log the raw material deduction
+                await c.inventoryLogs.insertOne({
+                    id: (0, id_1.generateId)(),
+                    type: "Manufacturing",
+                    itemId: d.id,
+                    itemName: d.materialName,
+                    quantityChange: -d.qty,
+                    referenceId: serialNumber,
+                    notes: `Consumed for Manufacturing Serial: ${serialNumber}`,
+                    createdAt: new Date(),
+                    createdBy: req.user?.email || "System",
+                });
+            }
+        }
+    }
     const normalizedStatus = status === "Sold" || status === "Returned" || status === "In Stock" ? status : "In Stock";
     const normalizedPayment = paymentStatus === "Pending" || paymentStatus === "Verified" || paymentStatus === "N/A"
         ? paymentStatus
@@ -72,11 +123,24 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
         status: normalizedStatus,
         invoiceNo: invoiceNo ? String(invoiceNo) : undefined,
         paymentStatus: normalizedPayment,
-        bomUsage: normalizeBomUsage(bomUsage),
+        bomUsage,
         createdAt: new Date(),
         updatedAt: new Date(),
     };
     await c.manufactured.insertOne(entry);
+    // Log the manufactured product addition
+    await c.inventoryLogs.insertOne({
+        id: (0, id_1.generateId)(),
+        type: "Manufacturing",
+        itemId: entry.id,
+        itemName: `${product.series} ${product.model} (${serialNumber})`,
+        quantityChange: 1,
+        referenceId: serialNumber,
+        notes: `Produced new serial`,
+        createdAt: new Date(),
+        createdBy: req.user?.email || "System",
+    });
+    await c.serials.updateOne({ serialNumber, productSeriesId: product.series }, { $set: { status: "Manufactured" } });
     return (0, http_1.ok)(res, entry, 201);
 });
 /** PUT /api/manufactured/:id/bom — modify BOM and adjust raw material stock by delta only */

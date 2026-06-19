@@ -632,38 +632,43 @@ function canAccessComplaint(user, complaint) {
 }
 /** GET /api/complaints — filter by type, status */
 router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier", "dispatch:manage"), async (req, res) => {
-    const c = await (0, collections_1.getCollections)();
-    const { type, status, page = "1", limit = "20", view } = req.query;
-    const user = req.user;
-    if (type && !requireComplaintTypeAccess(user, type)) {
-        return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
+    try {
+        const c = await (0, collections_1.getCollections)();
+        const { type, status, page = "1", limit = "20", view } = req.query;
+        const user = req.user;
+        if (type && !requireComplaintTypeAccess(user, type)) {
+            return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
+        }
+        if (!view && (!type || String(type).toLowerCase() === "consumer")) {
+            await rebalanceL1Queue();
+            await rebalanceWaitingLobby();
+        }
+        const filter = {};
+        if (type)
+            filter.type = type;
+        if (status)
+            filter.status = status;
+        const scopedFilter = view === "onsite-tracking"
+            ? (() => {
+                const scope = onsiteTrackingScope(user);
+                if (!scope) {
+                    return null;
+                }
+                return { $and: [filter, scope] };
+            })()
+            : applyComplaintRoleScope(filter, user);
+        if (!scopedFilter) {
+            return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
+        }
+        const p = Math.max(1, parseInt(page));
+        const l = Math.min(100, parseInt(limit));
+        const total = await c.complaints.countDocuments(scopedFilter);
+        const data = await c.complaints.find(scopedFilter).skip((p - 1) * l).limit(l).toArray();
+        return (0, http_1.ok)(res, { data, total, page: p, limit: l });
     }
-    if (!view && (!type || String(type).toLowerCase() === "consumer")) {
-        await rebalanceL1Queue();
-        await rebalanceWaitingLobby();
+    catch (err) {
+        console.log(err);
     }
-    const filter = {};
-    if (type)
-        filter.type = type;
-    if (status)
-        filter.status = status;
-    const scopedFilter = view === "onsite-tracking"
-        ? (() => {
-            const scope = onsiteTrackingScope(user);
-            if (!scope) {
-                return null;
-            }
-            return { $and: [filter, scope] };
-        })()
-        : applyComplaintRoleScope(filter, user);
-    if (!scopedFilter) {
-        return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
-    }
-    const p = Math.max(1, parseInt(page));
-    const l = Math.min(100, parseInt(limit));
-    const total = await c.complaints.countDocuments(scopedFilter);
-    const data = await c.complaints.find(scopedFilter).skip((p - 1) * l).limit(l).toArray();
-    return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
 /** GET /api/complaints/stats — for donut chart */
 router.get("/stats", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (_req, res) => {

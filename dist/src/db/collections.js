@@ -22,5 +22,9 @@ async function getCollections() {
         complaints: db.collection("complaints"),
         distributors: db.collection("distributors"),
         notifications: db.collection("notifications"),
+        boms: db.collection("series_boms"),
+        inventoryLogs: db.collection("inventory_logs"),
+        spareRequests: db.collection("spare_requests"),
+        replacementRequests: db.collection("replacement_requests"),
     };
 }
