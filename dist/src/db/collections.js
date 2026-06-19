@@ -11,6 +11,7 @@ async function getCollections() {
         engineerAssignments: db.collection("engineer_assignment"),
         ticketLoads: db.collection("ticket_load"),
         engineerAssignmentAudit: db.collection("engineer_assignment_audit"),
+        ticketAssignmentAudit: db.collection("ticket_assignment_audit"),
         pendingRegistrations: db.collection("pending_registrations"),
         pendingCustomerRegistrations: db.collection("pending_customer_registrations"),
         customers: db.collection("customers"),
@@ -22,9 +23,9 @@ async function getCollections() {
         complaints: db.collection("complaints"),
         distributors: db.collection("distributors"),
         notifications: db.collection("notifications"),
-        boms: db.collection("series_boms"),
-        inventoryLogs: db.collection("inventory_logs"),
-        spareRequests: db.collection("spare_requests"),
-        replacementRequests: db.collection("replacement_requests"),
+        boms: db.collection("boms"),
+        inventoryLogs: db.collection("inventoryLogs"),
+        spareRequests: db.collection("spareRequests"),
+        replacementRequests: db.collection("replacementRequests"),
     };
 }

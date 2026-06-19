@@ -4,15 +4,13 @@ import { getCollections } from "../db/collections";
 import type { Complaint, Customer, ManufacturedProduct, Notification, Sale } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
-import { resolveAssignmentByStateDistrict } from "../services/engineerAssignments";
+import { recordTicketAssignmentLog, routeCustomerTicketByStateDistrict, refreshTicketLoadForAssignment } from "../services/ticketRouting";
 import {
   ACTIVE_COMPLAINT_DUPLICATE_MESSAGE,
   CLOSED_COMPLAINT_STATUSES,
-  ENGINEER_CAPACITY_MESSAGE,
-  MAX_ACTIVE_SERVICE_TICKETS,
-  MAX_WAITING_LOBBY_TICKETS,
   normalizeComplaintSerialKey,
 } from "../utils/complaintRules";
+import { isValidEmailAddress, normalizeEmailAddress } from "../utils/validation";
 
 const router: Router = express.Router();
 const STANDARD_WARRANTY_MONTHS = 60;
@@ -140,65 +138,14 @@ function calculateWarrantyStatus(soldDate?: Date | string) {
   return addMonths(parsed, STANDARD_WARRANTY_MONTHS).getTime() >= Date.now() ? "In Warranty" : "Out of Warranty";
 }
 
-async function assignPortalTicket(issueDescription: string, input: {
-  location?: string;
+async function assignPortalTicket(input: {
   state?: string;
   district?: string;
 }) {
-  const c = await getCollections();
-  const region = mapPortalRegion(input.location);
-  const assignment = input.state && input.district ? await resolveAssignmentByStateDistrict(String(input.state), String(input.district)) : null;
-  const targetEngineer: any = assignment?.l1Engineer
-    ? { id: assignment.l1Engineer.id, name: assignment.l1Engineer.name, backupEngineerName: assignment.backupEngineer?.name }
-    : mappedPortalL1EngineerForDistrict(input.state, input.district) ?? region;
-  const engineer = await c.engineerMasters.findOne(
-    { $or: [{ id: targetEngineer.id }, { name: targetEngineer.name }], role: "L1", isActive: { $ne: false } },
-    { projection: { id: 1, name: 1 } }
-  );
-  const assignedEngineerId = engineer?.id ?? targetEngineer.id ?? targetEngineer.engineerEmail ?? targetEngineer.name;
-  const assignedEngineerName = engineer?.name ?? targetEngineer.name ?? targetEngineer.engineerName;
-  const priority = derivePriority(issueDescription);
-  const now = new Date();
-  const activeCount = await c.complaints.countDocuments({
-    $or: [{ assignedEngineerId }, { assignedEngineerName }],
-    status: { $in: PORTAL_ACTIVE_STATUSES },
+  return routeCustomerTicketByStateDistrict({
+    state: String(input.state ?? ""),
+    district: String(input.district ?? ""),
   });
-  const waitingCount = await c.complaints.countDocuments({
-    $or: [{ assignedEngineerId }, { assignedEngineerName }],
-    assignmentStatus: "Waiting",
-    status: "Waiting Lobby",
-  });
-  if (activeCount >= MAX_ACTIVE_SERVICE_TICKETS && waitingCount >= MAX_WAITING_LOBBY_TICKETS) {
-    return { blockedMessage: ENGINEER_CAPACITY_MESSAGE };
-  }
-  if (activeCount >= MAX_ACTIVE_SERVICE_TICKETS) {
-    const queuePosition = waitingCount + 1;
-    return {
-      region: region.name,
-      priority,
-      assignmentStatus: "Waiting" as const,
-      assignedEngineerId,
-      assignedEngineerName,
-      backupEngineerName: assignment?.backupEngineer?.name ?? region.backupEngineerName,
-      waitingSince: now,
-      slaPaused: true,
-      queuePosition,
-      status: "Waiting Lobby" as Complaint["status"],
-    };
-  }
-  return {
-    region: region.name,
-    priority,
-    assignmentStatus: "Assigned" as const,
-    assignedEngineerId,
-    assignedEngineerName,
-    backupEngineerName: assignment?.backupEngineer?.name ?? region.backupEngineerName,
-    activeTicketCountAtAssignment: activeCount,
-    slaStartedAt: now,
-    slaDueAt: new Date(now.getTime() + 4 * 60 * 60 * 1000),
-    slaPaused: false,
-    status: "Assigned to Engineer" as Complaint["status"],
-  };
 }
 
 async function findManufacturedBySerial(serialNumber: string) {
@@ -315,7 +262,7 @@ router.post("/complaints", async (req: Request, res: Response) => {
   const serialNumber = normalizeSerial(req.body.serialNumber);
   const mobile = normalizePhone(req.body.mobile);
   const customerName = String(req.body.customerName ?? "").trim();
-  const customerEmail = String(req.body.customerEmail ?? "").trim().toLowerCase();
+  const customerEmail = normalizeEmailAddress(req.body.customerEmail);
   const issueDescription = String(req.body.issueDescription ?? "").trim();
   const state = String(req.body.state ?? "").trim();
   const district = String(req.body.district ?? "").trim();
@@ -325,6 +272,12 @@ router.post("/complaints", async (req: Request, res: Response) => {
   }
   if (!state || !district) {
     return fail(res, "State and district are required");
+  }
+  if (!customerName) {
+    return fail(res, "Customer name is required");
+  }
+  if (customerEmail && !isValidEmailAddress(customerEmail)) {
+    return fail(res, "Please enter a valid email address");
   }
 
   const manufactured = await findManufacturedBySerial(serialNumber);
@@ -341,19 +294,15 @@ router.post("/complaints", async (req: Request, res: Response) => {
   const linkedCustomer = invoiceDetails.customer;
   const siteLocation = String(req.body.siteLocation ?? invoiceDetails.invoiceAddress ?? linkedCustomer?.address ?? "").trim();
 
-  if (!linkedCustomer && (!customerName || !mobile)) {
-    return fail(res, "Customer name and mobile number are required");
-  }
-
   const now = new Date();
-  const assignment = await assignPortalTicket(issueDescription, {
-    location: `${state} ${district} ${siteLocation}`,
+  const assignment = await assignPortalTicket({
     state,
     district,
   });
   if ((assignment as { blockedMessage?: string }).blockedMessage) {
     return fail(res, (assignment as { blockedMessage?: string }).blockedMessage as string, 400);
   }
+  const assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
   const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured.customerPhones);
   const complaint: Complaint = {
     id: generateId(),
@@ -361,10 +310,10 @@ router.post("/complaints", async (req: Request, res: Response) => {
     productSerialNo: serialNumber,
     productSerialNoKey: normalizeComplaintSerialKey(serialNumber),
     customerId: linkedCustomer?.id ?? manufactured.customerId,
-    customerName: customerName || linkedCustomer?.name,
+    customerName,
     customerPhone: mobile,
     customerPhones,
-    customerEmail: customerEmail || linkedCustomer?.email,
+    customerEmail: customerEmail || undefined,
     dateOfSale: manufactured.soldDate
       ? new Date(manufactured.soldDate)
       : invoiceDetails.sale?.saleDate
@@ -377,27 +326,25 @@ router.post("/complaints", async (req: Request, res: Response) => {
     siteLocation: siteLocation || undefined,
     state,
     district,
-    region: assignment.region,
-    priority: assignment.priority,
+    region: mapPortalRegion(`${state} ${district} ${siteLocation}`).name,
+    priority: derivePriority(issueDescription),
     warrantyStatus: invoiceDetails.warrantyStatus,
     productModel: invoiceDetails.productModel,
-    assignmentStatus: assignment.assignmentStatus,
-    assignedEngineerId: assignment.assignedEngineerId,
-    assignedEngineerName: assignment.assignedEngineerName,
-    backupEngineerName: assignment.backupEngineerName,
-    activeTicketCountAtAssignment: assignment.activeTicketCountAtAssignment,
-    waitingSince: assignment.waitingSince,
-    slaStartedAt: assignment.slaStartedAt,
-    slaDueAt: assignment.slaDueAt,
-    slaPaused: assignment.slaPaused,
-    queuePosition: assignment.queuePosition,
+    assignmentStatus: assignmentDecision?.assignmentStatus,
+    assignedEngineerId: assignmentDecision?.assignedEngineerId,
+    assignedEngineerName: assignmentDecision?.assignedEngineerName,
+    backupEngineerName: assignmentDecision?.backupEngineerName,
+    activeTicketCountAtAssignment: assignmentDecision?.activeTicketCountAtAssignment,
+    slaStartedAt: assignmentDecision?.slaStartedAt,
+    slaDueAt: assignmentDecision?.slaDueAt,
+    slaPaused: assignmentDecision?.slaPaused,
     initialAction: "Customer portal intake. Service team to triage and assign engineer.",
     escalationLevel: "L1",
     spareRequired: false,
     spareInventoryStatus: "Not Required",
     siteVisitRequired: false,
     l3SupportRequired: false,
-    status: (assignment.status ?? "Open at Aurawatt") as Complaint["status"],
+    status: assignmentDecision?.status ?? "Open at Aurawatt",
     raisedBy: "customer-portal",
     createdAt: now,
     updatedAt: now,
@@ -408,6 +355,34 @@ router.post("/complaints", async (req: Request, res: Response) => {
     { serialNumber },
     { $set: { customerPhones, updatedAt: now } }
   );
+  if (assignmentDecision && complaint.assignedEngineerId) {
+    await recordTicketAssignmentLog({
+      ticketId: complaint.id,
+      customerName: complaint.customerName ?? customerName,
+      mobileNumber: complaint.customerPhone ?? mobile,
+      email: complaint.customerEmail,
+      state: complaint.state ?? state,
+      district: complaint.district ?? district,
+      assignedEngineerId: complaint.assignedEngineerId ?? "",
+      assignedEngineerName: complaint.assignedEngineerName ?? "",
+      assignmentType: assignmentDecision.assignmentType,
+      assignmentReason: assignmentDecision.assignmentReason,
+      activeTicketCountAtAssignment: assignmentDecision.activeTicketCountAtAssignment,
+      lobbyTicketCountAtAssignment: assignmentDecision.lobbyTicketCountAtAssignment,
+      totalTicketCountAtAssignment: assignmentDecision.totalTicketCountAtAssignment,
+      assignmentStatus: assignmentDecision.assignmentStatus,
+      status: assignmentDecision.status,
+      createdBy: "customer-portal",
+      lastUpdatedBy: "customer-portal",
+      backupEngineerName: assignmentDecision.backupEngineerName,
+      slaStartedAt: assignmentDecision.slaStartedAt,
+      slaDueAt: assignmentDecision.slaDueAt,
+      slaPaused: assignmentDecision.slaPaused,
+    });
+  }
+  if (complaint.assignedEngineerId) {
+    await refreshTicketLoadForAssignment(complaint.assignedEngineerId, complaint.assignedEngineerName);
+  }
 
   try {
     const notification: Notification = {

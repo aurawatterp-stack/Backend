@@ -137,6 +137,9 @@ export async function initDatabase() {
   await ensureIndex(c.engineerAssignments, { district: 1 });
   await ensureUniqueIndex(c.ticketLoads, { id: 1 });
   await ensureUniqueIndex(c.ticketLoads, { engineerId: 1 });
+  await ensureUniqueIndex(c.ticketAssignmentAudit, { id: 1 });
+  await ensureIndex(c.ticketAssignmentAudit, { ticketId: 1 });
+  await ensureIndex(c.ticketAssignmentAudit, { assignedAt: -1 });
   await ensureIndex(c.engineerAssignmentAudit, { createdAt: -1 });
   await ensureIndex(c.engineerAssignmentAudit, { assignmentId: 1 });
 
@@ -158,6 +161,7 @@ export async function initDatabase() {
     c.engineerMasters,
     c.engineerAssignments,
     c.ticketLoads,
+    c.ticketAssignmentAudit,
     c.engineerAssignmentAudit,
   ]) {
     await ensureUniqueIndex(col as any, { id: 1 });

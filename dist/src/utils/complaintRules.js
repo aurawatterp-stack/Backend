@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ONSITE_CAPACITY_MESSAGE = exports.ENGINEER_CAPACITY_MESSAGE = exports.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE = exports.CLOSED_COMPLAINT_STATUSES = exports.MAX_WAITING_LOBBY_TICKETS = exports.MAX_ACTIVE_SERVICE_TICKETS = void 0;
+exports.ONSITE_CAPACITY_MESSAGE = exports.ENGINEER_CAPACITY_MESSAGE = exports.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE = exports.CLOSED_COMPLAINT_STATUSES = exports.LOBBY_TICKET_STATUSES = exports.ACTIVE_TICKET_STATUSES = exports.MAX_WAITING_LOBBY_TICKETS = exports.MAX_ACTIVE_SERVICE_TICKETS = void 0;
 exports.normalizeComplaintSerialKey = normalizeComplaintSerialKey;
 exports.isClosedComplaintStatus = isClosedComplaintStatus;
 exports.isActiveComplaintStatus = isActiveComplaintStatus;
@@ -8,6 +8,26 @@ exports.isWaitingLobbyComplaint = isWaitingLobbyComplaint;
 exports.isActiveWorkComplaint = isActiveWorkComplaint;
 exports.MAX_ACTIVE_SERVICE_TICKETS = 5;
 exports.MAX_WAITING_LOBBY_TICKETS = 5;
+exports.ACTIVE_TICKET_STATUSES = [
+    "New",
+    "Assigned",
+    "In Progress",
+    "Open at Aurawatt",
+    "Assigned to Engineer",
+    "In Progress at Aurawatt",
+    "Escalated to L2",
+    "Escalated to L3",
+    "Pending L3 Approval",
+    "Spare Requested",
+    "Replacement Requested",
+    "Awaiting Dispatch",
+    "Dispatch in Progress",
+];
+exports.LOBBY_TICKET_STATUSES = [
+    "Pending Assignment",
+    "Waiting Queue",
+    "Waiting Lobby",
+];
 exports.CLOSED_COMPLAINT_STATUSES = [
     "Resolved by Aurawatt",
     "Resolved by Suppliers",
@@ -25,8 +45,8 @@ function isActiveComplaintStatus(status) {
     return !isClosedComplaintStatus(status);
 }
 function isWaitingLobbyComplaint(complaint) {
-    return complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby";
+    return complaint.assignmentStatus === "Waiting" && exports.LOBBY_TICKET_STATUSES.includes(complaint.status);
 }
 function isActiveWorkComplaint(complaint) {
-    return complaint.assignmentStatus === "Assigned" && complaint.status !== "Assigned for Onsite" && !isWaitingLobbyComplaint(complaint);
+    return complaint.assignmentStatus === "Assigned" && exports.ACTIVE_TICKET_STATUSES.includes(complaint.status) && !isWaitingLobbyComplaint(complaint);
 }

@@ -21,6 +21,7 @@ import notificationsRouter from "./routes/notifications";
 import rolesRouter from "./routes/roles";
 import engineerAssignmentsRouter from "./routes/engineerAssignments";
 import bomsRouter from "./routes/boms";
+import geoRouter from "./routes/geo";
 
 const app = express();
 
@@ -66,6 +67,7 @@ app.use("/api/notifications", notificationsRouter);
 app.use("/api/roles", rolesRouter);
 app.use("/api/engineer-assignments", engineerAssignmentsRouter);
 app.use("/api/boms", bomsRouter);
+app.use("/api/geo", geoRouter);
 
 // 404 fallback
 app.use((req, res) => {

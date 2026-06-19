@@ -73,7 +73,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
                 .find({ productSeriesId: product.series, materialName: item.materialName, quantityAvailable: { $gt: 0 } })
                 .sort({ dateReceived: 1 })
                 .toArray();
-            let remainingRequired = item.quantity;
+            let remainingRequired = 1; // User requested exactly 1 unit per item, regardless of BOM count
             const deductions = [];
             for (const rm of rawMaterials) {
                 if (remainingRequired <= 0)
@@ -92,7 +92,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
                 });
             }
             if (remainingRequired > 0) {
-                return (0, http_1.fail)(res, `Insufficient stock for Raw Material: ${item.materialName}. Required: ${item.quantity}, Available: ${item.quantity - remainingRequired}`);
+                return (0, http_1.fail)(res, `Insufficient stock for Raw Material: ${item.materialName}. Required: 1, Available: 0`);
             }
             for (const d of deductions) {
                 await c.rawMaterials.updateOne({ id: d.id }, { $inc: { quantityAvailable: -d.qty }, $set: { updatedAt: new Date() } });
