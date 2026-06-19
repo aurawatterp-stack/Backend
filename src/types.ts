@@ -6,6 +6,7 @@ export type SystemRoleName =
   | "Accounts"
   | "Distributor"
   | "L1 Engineer"
+  | "L1 Backup Engineer"
   | "L2 Technical Team"
   | "L3 Advanced OEM Support"
   | "Warehouse Team"
@@ -224,6 +225,19 @@ export type Product = {
   createdAt: Date;
 };
 
+export type BOMItem = {
+  materialName: string;
+  quantity: number;
+};
+
+export type SeriesBOM = {
+  id: string;
+  series: string;
+  items: BOMItem[];
+  createdAt: Date;
+  updatedAt: Date;
+};
+
 export type RawMaterial = {
   id: string;
   productSeriesId: string;
@@ -266,7 +280,7 @@ export type ManufacturedProduct = {
   updatedAt: Date;
 };
 
-export type SerialStatus = "Available" | "Used";
+export type SerialStatus = "Available" | "Manufactured" | "Dispatched" | "Sold" | "Replacement Claimed" | "Used";
 export type SerialEntry = {
   id: string;
   serialNumber: string;
@@ -598,4 +612,59 @@ export type Notification = {
   readBy: string[];
   createdBy: string;
   createdAt: Date;
+};
+
+export type InventoryLogType = "Intake" | "Manufacturing" | "Spare Dispatch" | "Sales Dispatch" | "Replacement Dispatch";
+
+export type InventoryLog = {
+  id: string;
+  type: InventoryLogType;
+  itemId: string; // ID of the raw material or product
+  itemName: string;
+  quantityChange: number; // positive for intake, negative for dispatch/manufacturing
+  referenceId?: string; // Manufactured ID, SO ID, Ticket ID, etc.
+  notes?: string;
+  createdAt: Date;
+  createdBy: string;
+};
+
+export type SpareRequestStatus = "Pending" | "Approved" | "Dispatched" | "Rejected";
+
+export type SpareRequest = {
+  id: string;
+  ticketId: string;
+  complaintId: string;
+  rawMaterialId: string;
+  materialName: string;
+  quantity: number;
+  reason?: string;
+  status: SpareRequestStatus;
+  requestedBy: string;
+  requestedAt: Date;
+  approvedBy?: string;
+  approvedAt?: Date;
+  dispatchedBy?: string;
+  dispatchedAt?: Date;
+  courierDetails?: string;
+};
+
+export type ReplacementRequestStatus = "Pending" | "Approved" | "Dispatched" | "Rejected";
+
+export type ReplacementRequest = {
+  id: string;
+  ticketId: string;
+  complaintId: string;
+  oldSerialNo: string;
+  newSerialNo?: string;
+  model: string;
+  series: string;
+  reason?: string;
+  status: ReplacementRequestStatus;
+  requestedBy: string;
+  requestedAt: Date;
+  approvedBy?: string;
+  approvedAt?: Date;
+  dispatchedBy?: string;
+  dispatchedAt?: Date;
+  courierDetails?: string;
 };

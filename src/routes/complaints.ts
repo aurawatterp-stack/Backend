@@ -370,9 +370,9 @@ async function buildServiceAssignment(input: {
         activeTicketCountAtAssignment: engineer.activeCount,
         assignmentStatus: "Assigned" as const,
         waitingSince: undefined,
-        slaStartedAt: now,
-        slaDueAt: addHours(now, slaHoursForLevel(input.level)),
-        slaPaused: false,
+        slaStartedAt: undefined,
+        slaDueAt: undefined,
+        slaPaused: true,
         queuePosition: undefined,
         status: statusByLevel[input.level],
       };
@@ -575,8 +575,8 @@ async function rebalanceL1Queue() {
   for (const complaint of active) {
     if (!complaint.assignedEngineerId) continue;
     const rows = byEngineer.get(complaint.assignedEngineerId) ?? [];
-      rows.push(complaint);
-      byEngineer.set(complaint.assignedEngineerId, rows);
+    rows.push(complaint);
+    byEngineer.set(complaint.assignedEngineerId, rows);
   }
 
   const now = new Date();
@@ -727,37 +727,41 @@ function canAccessComplaint(user: AuthUser, complaint: Complaint): boolean {
 
 /** GET /api/complaints — filter by type, status */
 router.get("/", authenticate, requireAnyPermission("complaints:consumer", "complaints:supplier", "dispatch:manage"), async (req: Request, res: Response) => {
-  const c = await getCollections();
-  const { type, status, page = "1", limit = "20", view } = req.query as Record<string, string>;
-  const user = (req as any).user as AuthUser;
-  if (type && !requireComplaintTypeAccess(user, type)) {
-    return fail(res, "Access denied: insufficient permissions", 403);
-  }
-  if (!view && (!type || String(type).toLowerCase() === "consumer")) {
-    await rebalanceL1Queue();
-    await rebalanceWaitingLobby();
-  }
-  const filter: Record<string, unknown> = {};
-  if (type) filter.type = type;
-  if (status) filter.status = status;
-  const scopedFilter = view === "onsite-tracking"
-    ? (() => {
+  try {
+    const c = await getCollections();
+    const { type, status, page = "1", limit = "20", view } = req.query as Record<string, string>;
+    const user = (req as any).user as AuthUser;
+    if (type && !requireComplaintTypeAccess(user, type)) {
+      return fail(res, "Access denied: insufficient permissions", 403);
+    }
+    if (!view && (!type || String(type).toLowerCase() === "consumer")) {
+      await rebalanceL1Queue();
+      await rebalanceWaitingLobby();
+    }
+    const filter: Record<string, unknown> = {};
+    if (type) filter.type = type;
+    if (status) filter.status = status;
+    const scopedFilter = view === "onsite-tracking"
+      ? (() => {
         const scope = onsiteTrackingScope(user);
         if (!scope) {
           return null;
         }
         return { $and: [filter, scope] };
       })()
-    : applyComplaintRoleScope(filter, user);
-  if (!scopedFilter) {
-    return fail(res, "Access denied: insufficient permissions", 403);
-  }
+      : applyComplaintRoleScope(filter, user);
+    if (!scopedFilter) {
+      return fail(res, "Access denied: insufficient permissions", 403);
+    }
 
-  const p = Math.max(1, parseInt(page));
-  const l = Math.min(100, parseInt(limit));
-  const total = await c.complaints.countDocuments(scopedFilter);
-  const data = await c.complaints.find(scopedFilter).skip((p - 1) * l).limit(l).toArray();
-  return ok(res, { data, total, page: p, limit: l });
+    const p = Math.max(1, parseInt(page));
+    const l = Math.min(100, parseInt(limit));
+    const total = await c.complaints.countDocuments(scopedFilter);
+    const data = await c.complaints.find(scopedFilter).skip((p - 1) * l).limit(l).toArray();
+    return ok(res, { data, total, page: p, limit: l });
+  } catch (err: any) {
+    console.log(err);
+  }
 });
 
 /** GET /api/complaints/stats — for donut chart */
@@ -955,16 +959,16 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
 
   const assignment = String(type).toLowerCase() === "consumer"
     ? await buildAssignment({
-        issueDescription,
-        siteLocation,
-        region,
-        state: complaintState,
-        district: complaintDistrict,
-        priority,
-        l1Sla,
-        forceAssign: Boolean(forceAssign),
-        preferredEngineerName: engineerName,
-      })
+      issueDescription,
+      siteLocation,
+      region,
+      state: complaintState,
+      district: complaintDistrict,
+      priority,
+      l1Sla,
+      forceAssign: Boolean(forceAssign),
+      preferredEngineerName: engineerName,
+    })
     : undefined;
   if (assignment?.blockedMessage) {
     return fail(res, assignment.blockedMessage, 400);
@@ -1084,62 +1088,96 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
   return ok(res, complaint, 201);
 });
 
+/** POST /api/complaints/:id/start-sla — manually start SLA timer */
+router.post(
+  "/:id/start-sla",
+  authenticate,
+  requireAnyPermission("complaints:consumer", "complaints:supplier", "dispatch:manage"),
+  async (req: Request, res: Response) => {
+    const c = await getCollections();
+    const id = req.params.id;
+    const complaint = await c.complaints.findOne({ id });
+    if (!complaint) return fail(res, "Complaint not found", 404);
+    if (complaint.slaStartedAt) return fail(res, "SLA timer has already started for this complaint.", 400);
+
+    const now = new Date();
+    // Default to L1 (24 hours) if no escalation level is found.
+    const level = complaint.escalationLevel || "L1";
+    const slaHours = slaHoursForLevel(level as "L1" | "L2" | "L3");
+    
+    await c.complaints.updateOne(
+      { id },
+      { 
+        $set: { 
+          slaStartedAt: now,
+          slaDueAt: addHours(now, slaHours),
+          slaPaused: false,
+          updatedAt: now 
+        } 
+      }
+    );
+    
+    const updated = await c.complaints.findOne({ id });
+    return ok(res, updated);
+  }
+);
+
 /** PUT /api/complaints/:id/status — update complaint status */
 router.put(
   "/:id/status",
   authenticate,
   requireAnyPermission("complaints:consumer", "complaints:supplier", "dispatch:manage"),
   async (req: Request, res: Response) => {
-  const c = await getCollections();
-  const id = req.params.id;
-  const existing = await c.complaints.findOne({ id });
-  if (!existing) return fail(res, "Complaint not found", 404);
-  const user = (req as any).user as AuthUser;
-  if (!canAccessComplaint(user, existing)) {
-    return fail(res, "Access denied: insufficient permissions", 403);
-  }
-  const { status } = req.body;
-  if (!status) return fail(res, "status is required");
-  const updatedAt = new Date();
-  const nextStatus = String(status);
-  const escalationReason = normalizeText(req.body.escalationReason);
-  const escalationNotes = normalizeText(req.body.escalationNotes);
-  const noteSuffix = nextStatus === "Escalated to L3"
-    ? [
+    const c = await getCollections();
+    const id = req.params.id;
+    const existing = await c.complaints.findOne({ id });
+    if (!existing) return fail(res, "Complaint not found", 404);
+    const user = (req as any).user as AuthUser;
+    if (!canAccessComplaint(user, existing)) {
+      return fail(res, "Access denied: insufficient permissions", 403);
+    }
+    const { status } = req.body;
+    if (!status) return fail(res, "status is required");
+    const updatedAt = new Date();
+    const nextStatus = String(status);
+    const escalationReason = normalizeText(req.body.escalationReason);
+    const escalationNotes = normalizeText(req.body.escalationNotes);
+    const noteSuffix = nextStatus === "Escalated to L3"
+      ? [
         escalationReason ? `Reason: ${escalationReason}.` : "",
         escalationNotes ? `Notes: ${escalationNotes}.` : "",
       ].filter(Boolean).join(" ")
-    : "";
-  const event = createWorkflowHistoryEvent({
-    action: "Status updated",
-    fromStatus: existing.status,
-    toStatus: nextStatus,
-    user,
-    note: `Status changed to ${nextStatus}.${noteSuffix ? ` ${noteSuffix}` : ""}`,
-  });
-  const statusUpdate: Record<string, unknown> = {
-    status,
-    updatedAt,
-  };
-  const nextSerialKey = isClosedComplaintStatus(nextStatus) ? undefined : normalizeComplaintSerialKey(existing.productSerialNo) || undefined;
-  if (nextSerialKey) {
-    statusUpdate.productSerialNoKey = nextSerialKey;
-  }
-  await c.complaints.updateOne(
-    { id },
-    {
-      $set: statusUpdate,
-      ...(isClosedComplaintStatus(nextStatus) ? { $unset: { productSerialNoKey: "" } } : {}),
-      $push: { workflowHistory: event },
+      : "";
+    const event = createWorkflowHistoryEvent({
+      action: "Status updated",
+      fromStatus: existing.status,
+      toStatus: nextStatus,
+      user,
+      note: `Status changed to ${nextStatus}.${noteSuffix ? ` ${noteSuffix}` : ""}`,
+    });
+    const statusUpdate: Record<string, unknown> = {
+      status,
+      updatedAt,
+    };
+    const nextSerialKey = isClosedComplaintStatus(nextStatus) ? undefined : normalizeComplaintSerialKey(existing.productSerialNo) || undefined;
+    if (nextSerialKey) {
+      statusUpdate.productSerialNoKey = nextSerialKey;
     }
-  );
-  if (isClosedComplaintStatus(nextStatus) && isActiveWorkComplaint(existing)) {
-    await releaseNextWaitingTicket([
-      { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
-      { engineerId: user.userId, engineerName: user.name },
-    ], normalizeServiceLevel(existing.escalationLevel));
-  }
-  return ok(res, { ...existing, status, updatedAt });
+    await c.complaints.updateOne(
+      { id },
+      {
+        $set: statusUpdate,
+        ...(isClosedComplaintStatus(nextStatus) ? { $unset: { productSerialNoKey: "" } } : {}),
+        $push: { workflowHistory: event },
+      }
+    );
+    if (isClosedComplaintStatus(nextStatus) && isActiveWorkComplaint(existing)) {
+      await releaseNextWaitingTicket([
+        { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
+        { engineerId: user.userId, engineerName: user.name },
+      ], normalizeServiceLevel(existing.escalationLevel));
+    }
+    return ok(res, { ...existing, status, updatedAt });
   }
 );
 

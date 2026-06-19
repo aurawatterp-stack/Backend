@@ -25,6 +25,7 @@ export const SYSTEM_ROLES: SystemRoleName[] = [
   "Accounts",
   "Distributor",
   "L1 Engineer",
+  "L1 Backup Engineer",
   "L2 Technical Team",
   "L3 Advanced OEM Support",
   "Warehouse Team",
@@ -40,6 +41,7 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
   Accounts: ["dashboard:view", "accounts:manage"],
   Distributor: ["dashboard:view"],
   "L1 Engineer": ["dashboard:view", "complaints:consumer"],
+  "L1 Backup Engineer": ["dashboard:view", "complaints:consumer"],
   "L2 Technical Team": ["dashboard:view", "complaints:consumer"],
   "L3 Advanced OEM Support": ["dashboard:view", "complaints:consumer", "complaints:supplier"],
   "Warehouse Team": ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured", "dispatch:manage"],
@@ -55,6 +57,7 @@ export const ROLE_ALIASES: Record<SystemRoleName, UserRole[]> = {
   Accounts: ["Accounts", "Accounts Team", "Accounts Manager"],
   Distributor: ["Distributor"],
   "L1 Engineer": ["L1 Engineer", "Service", "Service Manager", "Support L1"],
+  "L1 Backup Engineer": ["L1 Backup Engineer", "L1 Backup", "Backup Engineer", "Backup"],
   "L2 Technical Team": ["L2 Technical Team", "Support L2", "Technical Team"],
   "L3 Advanced OEM Support": ["L3 Advanced OEM Support", "Support L3", "OEM Support"],
   "Warehouse Team": ["Warehouse Team", "Warehouse", "Inventory Team"],
@@ -85,6 +88,7 @@ export function normalizeRole(input: unknown): RoleName {
   if (key === "accounts team") return "Accounts Team";
   if (key === "distributor") return "Distributor";
   if (key === "service" || key === "service manager" || key === "l1" || key === "l1 engineer" || key === "support l1") return "L1 Engineer";
+  if (key === "backup" || key === "l1 backup engineer" || key === "l1 backup" || key === "backup engineer") return "L1 Backup Engineer";
   if (key === "l2" || key === "l2 technical team" || key === "support l2" || key === "technical team") return "L2 Technical Team";
   if (key === "l3" || key === "l3 advanced oem support" || key === "support l3" || key === "oem support") return "L3 Advanced OEM Support";
   if (key === "warehouse" || key === "warehouse team") return "Warehouse Team";

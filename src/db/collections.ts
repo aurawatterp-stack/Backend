@@ -18,6 +18,10 @@ import type {
   User,
   Notification,
   Role,
+  SeriesBOM,
+  InventoryLog,
+  SpareRequest,
+  ReplacementRequest,
 } from "../types";
 import { getMongoDb } from "./mongo";
 
@@ -39,6 +43,10 @@ export type Collections = {
   complaints: Collection<Complaint>;
   distributors: Collection<Distributor>;
   notifications: Collection<Notification>;
+  boms: Collection<SeriesBOM>;
+  inventoryLogs: Collection<InventoryLog>;
+  spareRequests: Collection<SpareRequest>;
+  replacementRequests: Collection<ReplacementRequest>;
 };
 
 export async function getCollections(): Promise<Collections> {
@@ -61,5 +69,9 @@ export async function getCollections(): Promise<Collections> {
     complaints: db.collection<Complaint>("complaints"),
     distributors: db.collection<Distributor>("distributors"),
     notifications: db.collection<Notification>("notifications"),
+    boms: db.collection<SeriesBOM>("series_boms"),
+    inventoryLogs: db.collection<InventoryLog>("inventory_logs"),
+    spareRequests: db.collection<SpareRequest>("spare_requests"),
+    replacementRequests: db.collection<ReplacementRequest>("replacement_requests"),
   };
 }
