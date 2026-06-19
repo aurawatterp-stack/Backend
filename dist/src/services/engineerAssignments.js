@@ -23,6 +23,7 @@ const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
 const collections_1 = require("../db/collections");
 const engineerAssignmentSeed_1 = require("../data/engineerAssignmentSeed");
+const complaintRules_1 = require("../utils/complaintRules");
 const id_1 = require("../utils/id");
 function normalizeText(value) {
     return String(value ?? "").trim();
@@ -342,30 +343,49 @@ async function listEngineerAssignmentOptions() {
         engineers: masters.map((row) => ({ id: row.id, name: row.name, role: row.role, email: row.email ?? "", mobile: row.mobile ?? "" })),
     };
 }
-async function recomputeTicketLoadForEngineer(engineerId) {
+async function countTicketLoadForEngineer(engineerId, engineerName, excludeComplaintId) {
     const c = await (0, collections_1.getCollections)();
+    const identityFilter = engineerName
+        ? { $or: [{ assignedEngineerId: engineerId }, { assignedEngineerName: engineerName }] }
+        : { assignedEngineerId: engineerId };
     const [activeCount, waitingCount] = await Promise.all([
-        c.complaints.countDocuments({ assignedEngineerId: engineerId, status: { $in: ["Assigned to Engineer", "In Progress at Aurawatt", "Escalated to L2", "Escalated to L3", "Pending L3 Approval", "Spare Requested", "Replacement Requested", "Awaiting Dispatch", "Dispatch in Progress"] } }),
-        c.complaints.countDocuments({ assignedEngineerId: engineerId, assignmentStatus: "Waiting", status: "Waiting Lobby" }),
+        c.complaints.countDocuments({
+            ...identityFilter,
+            status: { $in: [...complaintRules_1.ACTIVE_TICKET_STATUSES] },
+            ...(excludeComplaintId ? { id: { $ne: excludeComplaintId } } : {}),
+        }),
+        c.complaints.countDocuments({
+            ...identityFilter,
+            assignmentStatus: "Waiting",
+            status: { $in: [...complaintRules_1.LOBBY_TICKET_STATUSES] },
+            ...(excludeComplaintId ? { id: { $ne: excludeComplaintId } } : {}),
+        }),
     ]);
+    return { activeCount, waitingCount, totalCount: activeCount + waitingCount };
+}
+async function recomputeTicketLoadForEngineer(engineerId, engineerName) {
+    const c = await (0, collections_1.getCollections)();
     const now = new Date();
+    const { activeCount, waitingCount, totalCount } = await countTicketLoadForEngineer(engineerId, engineerName);
     await c.ticketLoads.updateOne({ engineerId }, {
         $set: {
             engineerId,
             activeCount,
             waitingCount,
+            totalCount,
+            lastUpdated: now,
             updatedAt: now,
         },
         $setOnInsert: {
             id: `load-${slugify(engineerId)}`,
         },
     }, { upsert: true });
-    return { engineerId, activeCount, waitingCount, updatedAt: now };
+    return { engineerId, activeCount, waitingCount, totalCount, lastUpdated: now, updatedAt: now };
 }
 async function rebuildTicketLoads() {
     const c = await (0, collections_1.getCollections)();
     const engineers = await c.engineerMasters.find({}).toArray();
-    const loads = await Promise.all(engineers.map((engineer) => recomputeTicketLoadForEngineer(engineer.id)));
+    const loads = await Promise.all(engineers.map((engineer) => recomputeTicketLoadForEngineer(engineer.id, engineer.name)));
     return loads;
 }
 async function createOrUpdateEngineerAssignment(input, actor) {

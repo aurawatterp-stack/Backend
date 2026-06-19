@@ -6,6 +6,7 @@ import path from "node:path";
 import { getCollections } from "../db/collections";
 import { SEED_ENGINEER_ASSIGNMENT_ROWS, SEED_ENGINEER_MASTER_ROWS, type SeedEngineerAssignment } from "../data/engineerAssignmentSeed";
 import type { AuthUser } from "../types";
+import { ACTIVE_TICKET_STATUSES, LOBBY_TICKET_STATUSES } from "../utils/complaintRules";
 import { generateId } from "../utils/id";
 
 export type EngineerRole = "L1" | "L2" | "L3" | "Backup";
@@ -40,6 +41,8 @@ export type TicketLoadRecord = {
   engineerId: string;
   activeCount: number;
   waitingCount: number;
+  totalCount: number;
+  lastUpdated: Date;
   updatedAt: Date;
 };
 
@@ -417,13 +420,31 @@ export async function listEngineerAssignmentOptions() {
   };
 }
 
-export async function recomputeTicketLoadForEngineer(engineerId: string) {
+async function countTicketLoadForEngineer(engineerId: string, engineerName?: string, excludeComplaintId?: string) {
   const c = await getCollections();
+  const identityFilter: Record<string, unknown> = engineerName
+    ? { $or: [{ assignedEngineerId: engineerId }, { assignedEngineerName: engineerName }] }
+    : { assignedEngineerId: engineerId };
   const [activeCount, waitingCount] = await Promise.all([
-    c.complaints.countDocuments({ assignedEngineerId: engineerId, status: { $in: ["Assigned to Engineer", "In Progress at Aurawatt", "Escalated to L2", "Escalated to L3", "Pending L3 Approval", "Spare Requested", "Replacement Requested", "Awaiting Dispatch", "Dispatch in Progress"] } }),
-    c.complaints.countDocuments({ assignedEngineerId: engineerId, assignmentStatus: "Waiting", status: "Waiting Lobby" }),
+    c.complaints.countDocuments({
+      ...identityFilter,
+      status: { $in: [...ACTIVE_TICKET_STATUSES] },
+      ...(excludeComplaintId ? { id: { $ne: excludeComplaintId } } : {}),
+    }),
+    c.complaints.countDocuments({
+      ...identityFilter,
+      assignmentStatus: "Waiting",
+      status: { $in: [...LOBBY_TICKET_STATUSES] },
+      ...(excludeComplaintId ? { id: { $ne: excludeComplaintId } } : {}),
+    }),
   ]);
+  return { activeCount, waitingCount, totalCount: activeCount + waitingCount };
+}
+
+export async function recomputeTicketLoadForEngineer(engineerId: string, engineerName?: string) {
+  const c = await getCollections();
   const now = new Date();
+  const { activeCount, waitingCount, totalCount } = await countTicketLoadForEngineer(engineerId, engineerName);
   await c.ticketLoads.updateOne(
     { engineerId },
     {
@@ -431,6 +452,8 @@ export async function recomputeTicketLoadForEngineer(engineerId: string) {
         engineerId,
         activeCount,
         waitingCount,
+        totalCount,
+        lastUpdated: now,
         updatedAt: now,
       },
       $setOnInsert: {
@@ -439,13 +462,13 @@ export async function recomputeTicketLoadForEngineer(engineerId: string) {
     },
     { upsert: true }
   );
-  return { engineerId, activeCount, waitingCount, updatedAt: now };
+  return { engineerId, activeCount, waitingCount, totalCount, lastUpdated: now, updatedAt: now };
 }
 
 export async function rebuildTicketLoads() {
   const c = await getCollections();
   const engineers = await c.engineerMasters.find({}).toArray();
-  const loads = await Promise.all(engineers.map((engineer) => recomputeTicketLoadForEngineer(engineer.id)));
+  const loads = await Promise.all(engineers.map((engineer) => recomputeTicketLoadForEngineer(engineer.id, engineer.name)));
   return loads;
 }
 

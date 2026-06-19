@@ -140,6 +140,8 @@ export type TicketLoad = {
   engineerId: string;
   activeCount: number;
   waitingCount: number;
+  totalCount: number;
+  lastUpdated: Date;
   updatedAt: Date;
 };
 
@@ -155,6 +157,25 @@ export type EngineerAssignmentAudit = {
   by?: string;
   byName?: string;
   createdAt: Date;
+};
+
+export type TicketAssignmentLog = {
+  id: string;
+  ticketId: string;
+  customerName: string;
+  mobileNumber: string;
+  email?: string;
+  state: string;
+  district: string;
+  assignedEngineerId: string;
+  assignedEngineerName: string;
+  assignmentType: "Primary L1" | "Backup L1" | "L2 Escalation";
+  assignmentReason: string;
+  assignedAt: Date;
+  createdBy?: string;
+  lastUpdatedBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type CustomerType = "Distributor" | "Individual";

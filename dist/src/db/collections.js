@@ -11,6 +11,7 @@ async function getCollections() {
         engineerAssignments: db.collection("engineer_assignment"),
         ticketLoads: db.collection("ticket_load"),
         engineerAssignmentAudit: db.collection("engineer_assignment_audit"),
+        ticketAssignmentAudit: db.collection("ticket_assignment_audit"),
         pendingRegistrations: db.collection("pending_registrations"),
         pendingCustomerRegistrations: db.collection("pending_customer_registrations"),
         customers: db.collection("customers"),

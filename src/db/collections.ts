@@ -18,6 +18,7 @@ import type {
   User,
   Notification,
   Role,
+  TicketAssignmentLog,
 } from "../types";
 import { getMongoDb } from "./mongo";
 
@@ -28,6 +29,7 @@ export type Collections = {
   engineerAssignments: Collection<EngineerAssignment>;
   ticketLoads: Collection<TicketLoad>;
   engineerAssignmentAudit: Collection<EngineerAssignmentAudit>;
+  ticketAssignmentAudit: Collection<TicketAssignmentLog>;
   pendingRegistrations: Collection<PendingRegistration>;
   pendingCustomerRegistrations: Collection<PendingCustomerRegistration>;
   customers: Collection<Customer>;
@@ -50,6 +52,7 @@ export async function getCollections(): Promise<Collections> {
     engineerAssignments: db.collection<EngineerAssignment>("engineer_assignment"),
     ticketLoads: db.collection<TicketLoad>("ticket_load"),
     engineerAssignmentAudit: db.collection<EngineerAssignmentAudit>("engineer_assignment_audit"),
+    ticketAssignmentAudit: db.collection<TicketAssignmentLog>("ticket_assignment_audit"),
     pendingRegistrations: db.collection<PendingRegistration>("pending_registrations"),
     pendingCustomerRegistrations: db.collection<PendingCustomerRegistration>("pending_customer_registrations"),
     customers: db.collection<Customer>("customers"),

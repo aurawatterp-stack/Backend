@@ -11,7 +11,9 @@ const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const engineerAssignments_1 = require("../services/engineerAssignments");
+const ticketRouting_1 = require("../services/ticketRouting");
 const complaintRules_1 = require("../utils/complaintRules");
+const validation_1 = require("../utils/validation");
 const router = express_1.default.Router();
 const MAX_INVERTER_PICTURE_BYTES = 5 * 1024 * 1024;
 const inverterPictureUpload = (0, multer_1.default)({
@@ -224,12 +226,12 @@ async function engineerTicketCounts(engineerId, engineerName, excludeComplaintId
     const c = await (0, collections_1.getCollections)();
     const activeFilter = {
         ...engineerIdentityFilter(engineerId, engineerName),
-        status: { $in: ACTIVE_ENGINEER_STATUSES },
+        status: { $in: [...complaintRules_1.ACTIVE_TICKET_STATUSES] },
     };
     const waitingFilter = {
         ...engineerIdentityFilter(engineerId, engineerName),
         assignmentStatus: "Waiting",
-        status: "Waiting Lobby",
+        status: { $in: [...complaintRules_1.LOBBY_TICKET_STATUSES] },
     };
     if (excludeComplaintId) {
         activeFilter.id = { $ne: excludeComplaintId };
@@ -722,6 +724,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
     const c = await (0, collections_1.getCollections)();
     const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, state, district, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, dispatchLrCopyName, dispatchLrCopyUrl, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, siteVisitEngineerId, siteVisitEngineerName, siteVisitRequestedById, siteVisitRequestedByName, siteVisitRequestedByRole, siteVisitRequestedAt, siteVisitRemarks, siteVisitSpareParts, siteVisitScheduledDate, siteVisitAssignedById, siteVisitAssignedByName, siteVisitAssignedByRole, engineerName, l3SupportRequired, replacementReason, replacementRemarks, replacementRequestImages, replacementRequestedById, replacementRequestedByName, replacementRequestedByRole, replacementRequestedAt, replacementApprovedById, replacementApprovedByName, replacementApprovedByRole, replacementApprovedAt, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
     const mobileNumber = req.body.mobileNumber ?? req.body.customerPhone;
+    const customerEmail = (0, validation_1.normalizeEmailAddress)(req.body.customerEmail);
     const installationDate = req.body.installationDate ?? dateOfSale;
     const complaintState = req.body.state;
     const complaintDistrict = req.body.district;
@@ -731,6 +734,9 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
     if (String(type).toLowerCase() === "consumer") {
         if (!productSerialNo || !customerName || !mobileNumber || !complaintState || !complaintDistrict) {
             return (0, http_1.fail)(res, "Serial number, customer name, mobile number, state, district and complaint description are required");
+        }
+        if (customerEmail && !(0, validation_1.isValidEmailAddress)(customerEmail)) {
+            return (0, http_1.fail)(res, "Please enter a valid email address");
         }
     }
     const user = req.user;
@@ -755,22 +761,16 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         return (0, http_1.fail)(res, "L1 inspection readings are mandatory before L2/L3 escalation");
     }
     const assignment = String(type).toLowerCase() === "consumer"
-        ? await buildAssignment({
-            issueDescription,
-            siteLocation,
-            region,
+        ? await (0, ticketRouting_1.routeCustomerTicketByStateDistrict)({
             state: complaintState,
             district: complaintDistrict,
-            priority,
-            l1Sla,
-            forceAssign: Boolean(forceAssign),
-            preferredEngineerName: engineerName,
         })
         : undefined;
     if (assignment?.blockedMessage) {
         return (0, http_1.fail)(res, assignment.blockedMessage, 400);
     }
-    const complaintStatus = assignment?.status ?? "Open at Aurawatt";
+    const assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
+    const complaintStatus = assignmentDecision?.status ?? "Open at Aurawatt";
     const complaint = {
         id: (0, id_1.generateId)(),
         type,
@@ -778,6 +778,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         productSerialNoKey: (0, complaintRules_1.isClosedComplaintStatus)(complaintStatus) ? undefined : productSerialNoKey || undefined,
         customerName,
         customerPhone: mobileNumber ? String(mobileNumber) : undefined,
+        customerEmail: customerEmail || undefined,
         rawMaterialId,
         rawMaterialName,
         vendorName,
@@ -791,24 +792,22 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         siteLocation,
         state: complaintState ? String(complaintState) : undefined,
         district: complaintDistrict ? String(complaintDistrict) : undefined,
-        region: assignment?.region ?? region,
-        priority: assignment?.priority ?? derivePriority(issueDescription, priority),
+        region,
+        priority: derivePriority(issueDescription, priority),
         warrantyStatus,
         productModel,
-        assignmentStatus: assignment?.assignmentStatus,
-        assignedEngineerId: assignment?.assignedEngineerId,
-        assignedEngineerName: assignment?.assignedEngineerName,
-        backupEngineerName: assignment?.backupEngineerName ?? backupEngineerName,
-        activeTicketCountAtAssignment: assignment?.activeTicketCountAtAssignment,
+        assignmentStatus: assignmentDecision?.assignmentStatus,
+        assignedEngineerId: assignmentDecision?.assignedEngineerId,
+        assignedEngineerName: assignmentDecision?.assignedEngineerName,
+        backupEngineerName: assignmentDecision?.backupEngineerName ?? backupEngineerName,
+        activeTicketCountAtAssignment: assignmentDecision?.activeTicketCountAtAssignment,
+        slaStartedAt: assignmentDecision?.slaStartedAt,
+        slaDueAt: assignmentDecision?.slaDueAt,
+        slaPaused: assignmentDecision?.slaPaused,
         escalatedById: undefined,
         escalatedByName: undefined,
         escalatedByRole: undefined,
         escalatedAt: undefined,
-        waitingSince: assignment?.waitingSince,
-        slaStartedAt: assignment?.slaStartedAt,
-        slaDueAt: assignment?.slaDueAt,
-        slaPaused: assignment?.slaPaused,
-        queuePosition: assignment?.queuePosition,
         initialAction,
         trackingNotes,
         escalationLevel,
@@ -881,6 +880,32 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
             })],
     };
     await c.complaints.insertOne(complaint);
+    if (assignmentDecision && complaint.assignedEngineerId) {
+        await (0, ticketRouting_1.recordTicketAssignmentLog)({
+            ticketId: complaint.id,
+            customerName,
+            mobileNumber: complaint.customerPhone ?? String(mobileNumber ?? ""),
+            email: complaint.customerEmail,
+            state: complaint.state ?? String(complaintState ?? ""),
+            district: complaint.district ?? String(complaintDistrict ?? ""),
+            assignedEngineerId: complaint.assignedEngineerId,
+            assignedEngineerName: complaint.assignedEngineerName ?? "",
+            assignmentType: assignmentDecision.assignmentType,
+            assignmentReason: assignmentDecision.assignmentReason,
+            activeTicketCountAtAssignment: assignmentDecision.activeTicketCountAtAssignment,
+            lobbyTicketCountAtAssignment: assignmentDecision.lobbyTicketCountAtAssignment,
+            totalTicketCountAtAssignment: assignmentDecision.totalTicketCountAtAssignment,
+            assignmentStatus: assignmentDecision.assignmentStatus,
+            status: assignmentDecision.status,
+            createdBy: user.userId,
+            lastUpdatedBy: user.userId,
+            backupEngineerName: assignmentDecision.backupEngineerName,
+            slaStartedAt: assignmentDecision.slaStartedAt,
+            slaDueAt: assignmentDecision.slaDueAt,
+            slaPaused: assignmentDecision.slaPaused,
+        });
+        await (0, ticketRouting_1.refreshTicketLoadForAssignment)(complaint.assignedEngineerId, complaint.assignedEngineerName);
+    }
     return (0, http_1.ok)(res, complaint, 201);
 });
 /** PUT /api/complaints/:id/status — update complaint status */
