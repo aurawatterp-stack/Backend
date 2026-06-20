@@ -126,6 +126,27 @@ function normalizeText(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function normalizeSpareRequestParts(input: unknown): NonNullable<Complaint["spareParts"]> {
+  if (!Array.isArray(input)) return [];
+  return input
+    .map((part, index) => {
+      const materialName = normalizeText(part?.materialName ?? part?.name ?? part?.sparePartName ?? part?.partName);
+      const quantity = Number(part?.quantity);
+      if (!materialName || !Number.isFinite(quantity) || quantity <= 0) return null;
+      const availableQuantity = Number(part?.availableQuantity);
+      return {
+        id: normalizeText(part?.id) || `${Date.now()}-${index}`,
+        series: normalizeText(part?.series) || undefined,
+        rawMaterialId: normalizeText(part?.rawMaterialId) || undefined,
+        materialName,
+        availableQuantity: Number.isFinite(availableQuantity) ? availableQuantity : undefined,
+        quantity,
+        notes: normalizeText(part?.notes) || undefined,
+      };
+    })
+    .filter(Boolean) as NonNullable<Complaint["spareParts"]>;
+}
+
 function normalizeLookup(value: unknown) {
   return normalizeText(value).toLowerCase().replace(/\s+/g, " ");
 }
@@ -816,7 +837,7 @@ router.get("/", authenticate, requireAnyPermission("complaints:consumer", "compl
     }
 
     const p = Math.max(1, parseInt(page));
-    const l = Math.min(100, parseInt(limit));
+    const l = Math.min(1000, parseInt(limit));
     const total = await c.complaints.countDocuments(scopedFilter);
     const data = await c.complaints.find(scopedFilter).skip((p - 1) * l).limit(l).toArray();
     return ok(res, { data, total, page: p, limit: l });
@@ -927,6 +948,7 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     spareName,
     spareQuantity,
     spareDispatchAddress,
+    spareParts,
     spareInventoryStatus,
     spareRequestStatus,
     dispatchTrackingNo,
@@ -1091,6 +1113,7 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     spareName,
     spareQuantity: spareQuantity ? Number(spareQuantity) : undefined,
     spareDispatchAddress,
+    spareParts: normalizeSpareRequestParts(spareParts),
     spareInventoryStatus,
     spareRequestStatus,
     dispatchTrackingNo,
@@ -1339,6 +1362,7 @@ router.put(
       "spareName",
       "spareQuantity",
       "spareDispatchAddress",
+      "spareParts",
       "spareInventoryStatus",
       "spareRequestStatus",
       "dispatchTrackingNo",
@@ -1400,6 +1424,9 @@ router.put(
     const siteVisitActive = Boolean(req.body.siteVisitRequired ?? existing.siteVisitRequired);
     for (const field of allowedFields) {
       if (field in req.body) update[field] = req.body[field];
+    }
+    if ("spareParts" in req.body) {
+      update.spareParts = normalizeSpareRequestParts(req.body.spareParts);
     }
     if ((req.body.status === "In Progress at Aurawatt" || ("serviceStartedAt" in req.body && req.body.serviceStartedAt)) && !existing.serviceStartedAt) {
       update.serviceStartedAt = serverNow;

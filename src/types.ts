@@ -6,7 +6,6 @@ export type SystemRoleName =
   | "Accounts"
   | "Distributor"
   | "L1 Engineer"
-  | "L1 Backup Engineer"
   | "L2 Technical Team"
   | "L3 Advanced OEM Support"
   | "Warehouse Team"
@@ -478,6 +477,16 @@ export type SparePartRequirement = {
   notes?: string;
 };
 
+export type SpareRequestPart = {
+  id: string;
+  series?: string;
+  rawMaterialId?: string;
+  materialName: string;
+  availableQuantity?: number;
+  quantity: number;
+  notes?: string;
+};
+
 export type Complaint = {
   id: string;
   type: ComplaintType;
@@ -536,6 +545,7 @@ export type Complaint = {
   spareName?: string;
   spareQuantity?: number;
   spareDispatchAddress?: string;
+  spareParts?: SpareRequestPart[];
   spareInventoryStatus?: "Not Required" | "Available" | "Procurement Required";
   spareRequestStatus?: "Not Required" | "Requested" | "Reserved" | "Dispatched" | "Procurement Triggered" | string;
   dispatchTrackingNo?: string;
