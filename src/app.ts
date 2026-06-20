@@ -3,7 +3,6 @@ import cors from "cors";
 import helmet from "helmet";
 import morgan from "morgan";
 
-import { CONFIG } from "./config";
 import { errorHandler } from "./middleware/error";
 import authRouter from "./routes/auth";
 import usersRouter from "./routes/users";
@@ -25,33 +24,16 @@ import geoRouter from "./routes/geo";
 const app = express();
 
 function createCorsOptions() {
-  const allowed = CONFIG.CORS_ORIGIN;
-  const isVercelOrigin = (origin: string) => /^https:\/\/[a-z0-9-]+(?:-[a-z0-9-]+)*\.vercel\.app$/i.test(origin);
-  const isLocalOrigin = (origin: string) =>
-    origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1");
+  const allowedOrigins = [
+    "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
+    "http://localhost:3000",
+    "http://127.0.0.1:3000",
+  ];
 
   return {
     origin: (requestOrigin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       if (!requestOrigin) return callback(null, true);
-      if (allowed === true) return callback(null, true);
-      if (typeof allowed === "string") {
-        if (requestOrigin === allowed) return callback(null, true);
-        if (process.env.VERCEL && isLocalOrigin(allowed) && isVercelOrigin(requestOrigin)) {
-          return callback(null, true);
-        }
-        return callback(null, false);
-      }
-      if (Array.isArray(allowed)) {
-        if (allowed.includes(requestOrigin)) return callback(null, true);
-
-        const isLocalOnly = allowed.length > 0 && allowed.every(isLocalOrigin);
-        if (process.env.VERCEL && isLocalOnly && isVercelOrigin(requestOrigin)) {
-          return callback(null, true);
-        }
-
-        return callback(null, false);
-      }
-      callback(new Error(`Origin ${requestOrigin} not allowed by CORS`));
+      return callback(null, allowedOrigins.includes(requestOrigin));
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
