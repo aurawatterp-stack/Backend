@@ -7,6 +7,40 @@
 let cachedApp;
 let bootError;
 
+const ALLOWED_ORIGINS = new Set([
+  "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]);
+
+function normalizeOrigin(origin) {
+  return typeof origin === "string" ? origin.trim().replace(/\/+$/, "") : "";
+}
+
+function applyCorsHeaders(req, res) {
+  const requestOrigin = normalizeOrigin(req.headers.origin);
+  if (!requestOrigin || !ALLOWED_ORIGINS.has(requestOrigin)) return false;
+
+  const originalSetHeader = res.setHeader.bind(res);
+  res.setHeader = (name, value) => {
+    const headerName = String(name).toLowerCase();
+    if (headerName === "access-control-allow-origin") {
+      return originalSetHeader(name, requestOrigin);
+    }
+    if (headerName === "access-control-allow-credentials") {
+      return originalSetHeader(name, "true");
+    }
+    return originalSetHeader(name, value);
+  };
+
+  res.setHeader("access-control-allow-origin", requestOrigin);
+  res.setHeader("vary", "Origin");
+  res.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
+  res.setHeader("access-control-allow-headers", "Authorization,Content-Type,Accept");
+  res.setHeader("access-control-allow-credentials", "true");
+  return true;
+}
+
 function loadApp() {
   if (bootError) throw bootError;
   if (cachedApp) return cachedApp;
@@ -24,6 +58,13 @@ function loadApp() {
 module.exports = (req, res) => {
   try {
     const app = loadApp();
+    const corsApplied = applyCorsHeaders(req, res);
+
+    if (corsApplied && req.method === "OPTIONS") {
+      res.statusCode = 204;
+      return res.end();
+    }
+
     // When routed via `vercel.json` we attach the original path as a query param.
     // Use it to restore the original URL so Express routing works.
     if (req.query && typeof req.query.__path === "string") {
