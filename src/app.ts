@@ -20,33 +20,13 @@ import dashboardRouter from "./routes/dashboard";
 import notificationsRouter from "./routes/notifications";
 import rolesRouter from "./routes/roles";
 import engineerAssignmentsRouter from "./routes/engineerAssignments";
-import bomsRouter from "./routes/boms";
 import geoRouter from "./routes/geo";
 
 const app = express();
 
-function createCorsOptions() {
-  const allowed = CONFIG.CORS_ORIGIN;
-  return {
-    origin: (requestOrigin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
-      if (!requestOrigin) return callback(null, true);
-      if (allowed === true) return callback(null, true);
-      if (typeof allowed === "string") return callback(null, requestOrigin === allowed);
-      if (Array.isArray(allowed)) return callback(null, allowed.includes(requestOrigin));
-      callback(new Error(`Origin ${requestOrigin} not allowed by CORS`));
-    },
-    credentials: true,
-    methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type", "Accept"],
-    optionsSuccessStatus: 204,
-  };
-}
-
 // Global middleware
 app.use(helmet());
-const corsOptions = createCorsOptions();
-app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
+app.use(cors({ origin: CONFIG.CORS_ORIGIN, credentials: true }));
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(morgan("dev"));
@@ -85,7 +65,6 @@ app.use("/api/dashboard", dashboardRouter);
 app.use("/api/notifications", notificationsRouter);
 app.use("/api/roles", rolesRouter);
 app.use("/api/engineer-assignments", engineerAssignmentsRouter);
-app.use("/api/boms", bomsRouter);
 app.use("/api/geo", geoRouter);
 
 // 404 fallback
