@@ -71,14 +71,8 @@ function loadEnvFileIfPresent(filePath, options = {}) {
     }
 }
 const backendRoot = path.resolve(__dirname, "..");
-const isServerless = Boolean(process.env.VERCEL);
-// In local development we can safely read `.env` files from disk.
-// In Vercel/serverless runtime the filesystem is read-only and repo-local
-// `.env` files can accidentally override the real deployment environment.
-if (!isServerless) {
-    loadEnvFileIfPresent(path.resolve(process.cwd(), ".env"));
-    loadEnvFileIfPresent(path.resolve(backendRoot, ".env"), { override: true });
-}
+loadEnvFileIfPresent(path.resolve(process.cwd(), ".env"));
+loadEnvFileIfPresent(path.resolve(backendRoot, ".env"), { override: true });
 function cleanSecretEnv(name) {
     const raw = process.env[name] ?? "";
     return raw.trim().replace(/^["']|["']$/g, "");
@@ -122,21 +116,17 @@ function bool(name, fallback) {
 function corsOriginsFromEnv(raw) {
     const normalize = (origin) => origin.trim().replace(/\/+$/, "");
     const value = (raw ?? "").trim();
-    const isProduction = process.env.NODE_ENV === "production";
-    if (!value) {
-        return isProduction ? true : ["http://localhost:3000", "http://127.0.0.1:3000"];
-    }
+    // If not configured, be permissive on Vercel to avoid "Failed to fetch" due to CORS.
+    // For local dev, keep localhost-only by default.
+    if (!value)
+        return process.env.VERCEL ? true : "http://localhost:3000";
     if (value === "*")
         return true;
-    const origins = value.includes(",")
-        ? value.split(",").map(normalize).filter(Boolean)
-        : [normalize(value)];
-    const isLocalOnly = origins.length > 0 && origins.every((origin) => origin.startsWith("http://localhost") || origin.startsWith("http://127.0.0.1"));
-    if (isProduction && isLocalOnly) {
-        return true;
-    }
-    return origins.length === 1 ? origins[0] : origins;
+    if (value.includes(","))
+        return value.split(",").map(normalize).filter(Boolean);
+    return normalize(value);
 }
+const isServerless = Boolean(process.env.VERCEL);
 // Vercel (and most serverless platforms) has a read-only filesystem, except `/tmp`.
 // Any disk uploads must go to `/tmp` or an external object store.
 const uploadDirRaw = process.env.UPLOAD_DIR?.trim() || (isServerless ? "/tmp/uploads" : "uploads");

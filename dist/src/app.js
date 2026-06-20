@@ -7,7 +7,6 @@ const express_1 = __importDefault(require("express"));
 const cors_1 = __importDefault(require("cors"));
 const helmet_1 = __importDefault(require("helmet"));
 const morgan_1 = __importDefault(require("morgan"));
-const config_1 = require("./config");
 const error_1 = require("./middleware/error");
 const auth_1 = __importDefault(require("./routes/auth"));
 const users_1 = __importDefault(require("./routes/users"));
@@ -24,22 +23,19 @@ const dashboard_1 = __importDefault(require("./routes/dashboard"));
 const notifications_1 = __importDefault(require("./routes/notifications"));
 const roles_1 = __importDefault(require("./routes/roles"));
 const engineerAssignments_1 = __importDefault(require("./routes/engineerAssignments"));
-const boms_1 = __importDefault(require("./routes/boms"));
 const geo_1 = __importDefault(require("./routes/geo"));
 const app = (0, express_1.default)();
 function createCorsOptions() {
-    const allowed = config_1.CONFIG.CORS_ORIGIN;
+    const allowedOrigins = [
+        "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ];
     return {
         origin: (requestOrigin, callback) => {
             if (!requestOrigin)
                 return callback(null, true);
-            if (allowed === true)
-                return callback(null, true);
-            if (typeof allowed === "string")
-                return callback(null, requestOrigin === allowed);
-            if (Array.isArray(allowed))
-                return callback(null, allowed.includes(requestOrigin));
-            callback(new Error(`Origin ${requestOrigin} not allowed by CORS`));
+            return callback(null, allowedOrigins.includes(requestOrigin));
         },
         credentials: true,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
@@ -51,7 +47,6 @@ function createCorsOptions() {
 app.use((0, helmet_1.default)());
 const corsOptions = createCorsOptions();
 app.use((0, cors_1.default)(corsOptions));
-app.options("*", (0, cors_1.default)(corsOptions));
 app.use(express_1.default.json());
 app.use(express_1.default.urlencoded({ extended: true }));
 app.use((0, morgan_1.default)("dev"));
@@ -86,7 +81,6 @@ app.use("/api/dashboard", dashboard_1.default);
 app.use("/api/notifications", notifications_1.default);
 app.use("/api/roles", roles_1.default);
 app.use("/api/engineer-assignments", engineerAssignments_1.default);
-app.use("/api/boms", boms_1.default);
 app.use("/api/geo", geo_1.default);
 // 404 fallback
 app.use((req, res) => {
