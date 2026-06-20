@@ -86,9 +86,11 @@ function bool(name: string, fallback: boolean): boolean {
 function corsOriginsFromEnv(raw: string | undefined): string | string[] | boolean {
   const normalize = (origin: string) => origin.trim().replace(/\/+$/, "");
   const value = (raw ?? "").trim();
-  // If not configured, be permissive on Vercel to avoid "Failed to fetch" due to CORS.
-  // For local dev, keep localhost-only by default.
-  if (!value) return process.env.VERCEL ? true : "http://localhost:3000";
+  // If not configured, allow localhost dev origins locally,
+  // but be permissive in production environments to avoid blocking deployed frontends.
+  if (!value) return process.env.VERCEL || process.env.NODE_ENV === "production"
+    ? true
+    : ["http://localhost:3000", "http://127.0.0.1:3000"];
   if (value === "*") return true;
   if (value.includes(",")) return value.split(",").map(normalize).filter(Boolean);
   return normalize(value);
