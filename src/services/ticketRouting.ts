@@ -200,6 +200,23 @@ export async function recordTicketAssignmentLog(input: TicketAssignmentInput & T
     updatedAt: now,
   };
   await c.ticketAssignmentAudit.insertOne(log);
+
+  if (input.assignmentType === "Backup L1") {
+    await c.notifications.insertOne({
+      id: generateId(),
+      type: "complaint_workflow_updated",
+      title: "Assigned as Backup L1",
+      body: `Ticket assigned to you because the Primary L1 engineer was at full capacity.`,
+      entityType: "complaint",
+      entityId: input.ticketId,
+      audienceRoles: [],
+      audienceUserIds: [input.assignedEngineerId],
+      readBy: [],
+      createdBy: input.createdBy || "system",
+      createdAt: now,
+    });
+  }
+
   return log;
 }
 

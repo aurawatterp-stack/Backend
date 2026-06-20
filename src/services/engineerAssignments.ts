@@ -9,7 +9,7 @@ import type { AuthUser } from "../types";
 import { ACTIVE_TICKET_STATUSES, LOBBY_TICKET_STATUSES } from "../utils/complaintRules";
 import { generateId } from "../utils/id";
 
-export type EngineerRole = "L1" | "L2" | "L3" | "Backup";
+export type EngineerRole = "L1" | "L2" | "L3";
 
 export type EngineerMasterRecord = {
   id: string;
@@ -276,7 +276,7 @@ function seedEngineerAssignmentDocument(row: SeedEngineerAssignment): EngineerAs
     district: row.district,
     l1EngineerId: engineerMasterId(row.l1EngineerName, "L1"),
     l2EngineerId: engineerMasterId(row.l2EngineerName, "L2"),
-    l1BackupEngineerId: engineerMasterId(row.l1BackupEngineerName, "Backup"),
+    l1BackupEngineerId: engineerMasterId(row.l1BackupEngineerName, "L1"),
     source: "seeded-workbook",
     createdAt: now,
     updatedAt: now,
@@ -495,7 +495,7 @@ export async function createOrUpdateEngineerAssignment(input: {
   const [l1, l2, backup] = await Promise.all([
     ensureEngineerMasterRecord(row.l1EngineerName, "L1"),
     ensureEngineerMasterRecord(row.l2EngineerName, "L2"),
-    ensureEngineerMasterRecord(row.l1BackupEngineerName, "Backup"),
+    ensureEngineerMasterRecord(row.l1BackupEngineerName, "L1"),
   ]);
 
   const now = new Date();
@@ -505,7 +505,7 @@ export async function createOrUpdateEngineerAssignment(input: {
     district: row.district,
     l1EngineerId: l1?.id ?? engineerMasterId(row.l1EngineerName, "L1"),
     l2EngineerId: l2?.id ?? engineerMasterId(row.l2EngineerName, "L2"),
-    l1BackupEngineerId: backup?.id ?? engineerMasterId(row.l1BackupEngineerName, "Backup"),
+    l1BackupEngineerId: backup?.id ?? engineerMasterId(row.l1BackupEngineerName, "L1"),
     source: previous?.source ?? "manual",
     createdAt: previous?.createdAt ?? now,
     updatedAt: now,
