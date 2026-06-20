@@ -530,8 +530,64 @@ async function releaseNextWaitingTicket(identities: EngineerIdentity[] = [], lev
   );
 }
 
+/**
+ * Like releaseNextWaitingTicket but excludes `excludeId` from the active count
+ * so that exactly one slot appears free for the promotion check. Used after
+ * manually starting SLA on a ticket so the active lobby auto-tops up to 5.
+ */
+async function releaseNextWaitingTicketExcluding(identities: EngineerIdentity[] = [], level?: ServiceLevel, excludeId?: string) {
+  const c = await getCollections();
+  const filter: Record<string, unknown> = { assignmentStatus: "Waiting", status: "Waiting Lobby" };
+  if (level) filter.escalationLevel = level;
+  const identityFilter = buildEngineerIdentityFilter(identities);
+  if (identityFilter.length) {
+    filter.$or = identityFilter;
+  }
+
+  // Promote at most one ticket (the SLA-start freed one slot).
+  const waiting = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
+  if (!waiting.length) return;
+  const next = waiting[0];
+  const nextLevel = normalizeServiceLevel(next.escalationLevel);
+  const assignment = await buildServiceAssignment({
+    level: nextLevel,
+    issueDescription: next.issueDescription,
+    siteLocation: next.siteLocation,
+    region: next.region,
+    state: next.state,
+    district: next.district,
+    priority: next.priority,
+    l1Sla: next.l1Sla,
+    excludeComplaintId: excludeId ?? next.id,   // exclude the SLA-started ticket from count
+    preferredEngineerId: next.assignedEngineerId,
+    preferredEngineerName: next.assignedEngineerName,
+    preferredEngineerEmail: next.assignedEngineerId,
+  });
+  if (!assignment.blockedMessage && assignment.assignmentStatus === "Assigned") {
+    const promotedAt = new Date();
+    await c.complaints.updateOne(
+      { id: next.id },
+      {
+        $set: { ...assignment, updatedAt: promotedAt },
+        $unset: { waitingSince: "", queuePosition: "" },
+      }
+    );
+  }
+
+  // Renumber remaining waiting tickets.
+  const remaining = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
+  await Promise.all(
+    remaining.map((complaint, index) => c.complaints.updateOne(
+      { id: complaint.id },
+      { $set: { queuePosition: index + 1, updatedAt: new Date() } }
+    ))
+  );
+}
+
+
 async function rebalanceWaitingLobby() {
   const c = await getCollections();
+
   const waitingRows = await c.complaints
     .find(
       {
@@ -1133,24 +1189,38 @@ router.post(
     const complaint = await c.complaints.findOne({ id });
     if (!complaint) return fail(res, "Complaint not found", 404);
     if (complaint.slaStartedAt) return fail(res, "SLA timer has already started for this complaint.", 400);
+    // Only active-lobby tickets (assignmentStatus === "Assigned") can have SLA started.
+    if (complaint.assignmentStatus === "Waiting" || complaint.status === "Waiting Lobby") {
+      return fail(res, "SLA cannot be started for a Waiting Lobby ticket. It must first be promoted to Active.", 400);
+    }
 
     const now = new Date();
-    // Default to L1 (24 hours) if no escalation level is found.
-    const level = complaint.escalationLevel || "L1";
-    const slaHours = slaHoursForLevel(level as "L1" | "L2" | "L3");
-    
+    // Default to L1 (4 hours) if no escalation level is found.
+    const level = (complaint.escalationLevel || "L1") as "L1" | "L2" | "L3";
+    const slaHours = slaHoursForLevel(level);
+
     await c.complaints.updateOne(
       { id },
-      { 
-        $set: { 
+      {
+        $set: {
           slaStartedAt: now,
           slaDueAt: addHours(now, slaHours),
           slaPaused: false,
-          updatedAt: now 
-        } 
+          updatedAt: now,
+        },
       }
     );
-    
+
+    // Auto-refill the active lobby: after SLA is started on this ticket,
+    // promote the next waiting-lobby ticket so the active queue stays at 5.
+    // We exclude this complaint from the active count so releaseNextWaitingTicket
+    // sees one free slot and promotes exactly one waiting ticket.
+    await releaseNextWaitingTicketExcluding(
+      [{ engineerId: complaint.assignedEngineerId, engineerName: complaint.assignedEngineerName }],
+      normalizeServiceLevel(complaint.escalationLevel),
+      complaint.id
+    );
+
     const updated = await c.complaints.findOne({ id });
     return ok(res, updated);
   }
