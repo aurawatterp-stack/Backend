@@ -413,10 +413,11 @@ export async function listEngineerAssignmentOptions() {
     c.engineerAssignments.find({}).sort({ state: 1, district: 1 }).toArray(),
     c.engineerMasters.find({}).sort({ role: 1, name: 1 }).toArray(),
   ]);
+  const visibleEngineers = masters.filter((row) => row.role !== "Backup" && !/backup/i.test(row.name));
   return {
     states: Array.from(new Set(assignments.map((row) => row.state))).sort((a, b) => a.localeCompare(b)),
     districts: Array.from(new Set(assignments.map((row) => row.district))).sort((a, b) => a.localeCompare(b)),
-    engineers: masters.map((row) => ({ id: row.id, name: row.name, role: row.role, email: row.email ?? "", mobile: row.mobile ?? "" })),
+    engineers: visibleEngineers.map((row) => ({ id: row.id, name: row.name, role: row.role, email: row.email ?? "", mobile: row.mobile ?? "" })),
   };
 }
 

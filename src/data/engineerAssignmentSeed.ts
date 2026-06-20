@@ -29,16 +29,6 @@ export const SEED_ENGINEER_MASTER_ROWS: SeedEngineerMaster[] = [
   { id: "eng-l2-naveen-maurya", name: "Naveen Maurya", email: "", mobile: "", role: "L2" },
   { id: "eng-l2-prashant-noida", name: "Prashant Noida", email: "", mobile: "", role: "L2" },
   { id: "eng-l3-mahesh-choudhary", name: "Mahesh Choudhary", email: "", mobile: "", role: "L3" },
-  { id: "eng-backup-ashutosh", name: "Ashutosh Backup", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-neeraj", name: "Neeraj Backup", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-nitin", name: "Nitin Backup", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-pradeep", name: "Pradeep Backup", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-prashant-singh", name: "Prashant Singh Backup", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-piyush", name: "Piyush Backup", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-rajat", name: "Rajat Backup", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-swastik", name: "Swastik Backup", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-naveen-maurya", name: "Naveen Maurya", email: "", mobile: "", role: "L1" },
-  { id: "eng-backup-prashant-noida", name: "Prashant Noida", email: "", mobile: "", role: "L1" },
 ];
 
 export const SEED_ENGINEER_ASSIGNMENT_ROWS: SeedEngineerAssignment[] = [

@@ -261,6 +261,7 @@ export type SeriesBOM = {
 export type RawMaterial = {
   id: string;
   productSeriesId: string;
+  inwardMode?: "Local" | "International";
   materialName: string;
   dateReceived: Date;
   billType: string;
@@ -288,6 +289,7 @@ export type ManufacturedProduct = {
     rawMaterialId?: string;
     materialName: string;
     batch?: string;
+    inwardMode?: "Local" | "International";
     invoiceNo?: string;
     vendorName?: string;
     quantityUsed: number;

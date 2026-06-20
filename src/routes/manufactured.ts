@@ -81,20 +81,21 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
         .toArray();
 
       let remainingRequired = 1; // User requested exactly 1 unit per item, regardless of BOM count
-      const deductions: { id: string; qty: number; materialName: string }[] = [];
+      const deductions: { id: string; qty: number; materialName: string; batch?: string; inwardMode?: "Local" | "International" }[] = [];
 
       for (const rm of rawMaterials) {
         if (remainingRequired <= 0) break;
         const available = rm.quantityAvailable;
         const toDeduct = Math.min(available, remainingRequired);
         
-        deductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName });
+        deductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName, batch: rm.batch, inwardMode: rm.inwardMode });
         remainingRequired -= toDeduct;
 
         bomUsage.push({
           rawMaterialId: rm.id,
           materialName: rm.materialName,
           batch: rm.batch,
+          inwardMode: rm.inwardMode,
           invoiceNo: rm.referenceNo,
           vendorName: rm.vendorName,
           quantityUsed: toDeduct,
@@ -110,12 +111,11 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
           { id: d.id },
           { $inc: { quantityAvailable: -d.qty }, $set: { updatedAt: new Date() } }
         );
-        // Log the raw material deduction
         await c.inventoryLogs.insertOne({
           id: generateId(),
           type: "Manufacturing",
           itemId: d.id,
-          itemName: d.materialName,
+          itemName: `${d.materialName} (${d.batch ?? "No Batch"}${d.inwardMode ? `, ${d.inwardMode}` : ""})`,
           quantityChange: -d.qty,
           referenceId: serialNumber,
           notes: `Consumed for Manufacturing Serial: ${serialNumber}`,

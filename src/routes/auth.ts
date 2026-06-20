@@ -1,7 +1,7 @@
 import express, { type Request, type Response, type Router } from "express";
 import bcrypt from "bcryptjs";
 
-import { getCollections } from "../db/collections";
+import { getCollections, type Collections } from "../db/collections";
 import { db as mockDb } from "../db/mockDb";
 import { authenticate } from "../middleware/auth";
 import { DEFAULT_ROLE_PERMISSIONS, normalizeRole } from "../rbac";
@@ -12,18 +12,37 @@ import { signToken } from "../utils/jwt";
 
 const router: Router = express.Router();
 
-async function permissionsForRole(role: RoleName): Promise<Permission[]> {
+async function tryGetCollections(): Promise<Collections | null> {
+  try {
+    return await getCollections();
+  } catch {
+    return null;
+  }
+}
+
+async function permissionsForRole(role: RoleName, c?: Collections | null): Promise<Permission[]> {
   if (role === "Admin") return [];
-  const c = await getCollections();
+  if (!c) {
+    return (DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? []) as Permission[];
+  }
+
   const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
   const defaults = DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? [];
   return Array.from(new Set([...(doc?.permissions ?? []), ...defaults])) as Permission[];
 }
 
-async function resolveLoginUser(email: string, password: string): Promise<User | null> {
-  const c = await getCollections();
-  const user = await c.users.findOne({ email });
+async function resolveLoginUser(email: string, password: string, c: Collections | null): Promise<User | null> {
   const demoUser = mockDb.users.find((item) => item.email.toLowerCase() === email);
+
+  if (!c) {
+    if (!demoUser) return null;
+    const demoPasswordValid = await bcrypt.compare(password, demoUser.passwordHash);
+    if (!demoPasswordValid) return null;
+    const now = new Date();
+    return { ...demoUser, email, role: normalizeRole(demoUser.role), isActive: true, updatedAt: now } as User;
+  }
+
+  const user = await c.users.findOne({ email });
 
   if (!user) {
     if (!demoUser) return null;
@@ -67,9 +86,9 @@ router.post("/login", async (req: Request, res: Response) => {
     return fail(res, "Email and password are required");
   }
 
-  const c = await getCollections();
+  const c = await tryGetCollections();
   const normalizedEmail = email.trim().toLowerCase();
-  const user = await resolveLoginUser(normalizedEmail, password);
+  const user = await resolveLoginUser(normalizedEmail, password, c);
   if (!user || !user.isActive) {
     return fail(res, "Invalid credentials", 401);
   }
@@ -80,11 +99,11 @@ router.post("/login", async (req: Request, res: Response) => {
   }
 
   const role = normalizedEmail === "accountsdept@avavbusiness.com" ? "Accounts" : normalizeRole(user.role);
-  if (role !== user.role) {
+  if (c && role !== user.role) {
     await c.users.updateOne({ id: user.id }, { $set: { role, updatedAt: new Date() } });
   }
 
-  const permissions = await permissionsForRole(role);
+  const permissions = await permissionsForRole(role, c);
   const token = signToken({ userId: user.id, email: user.email, role });
 
   return ok(res, {
@@ -160,14 +179,14 @@ router.post("/register", async (req: Request, res: Response) => {
  */
 router.get("/me", authenticate, async (req: Request, res: Response) => {
   const { userId } = (req as any).user as JwtPayload;
-  const c = await getCollections();
-  const user = await c.users.findOne({ id: userId });
+  const c = await tryGetCollections();
+  const user = c ? await c.users.findOne({ id: userId }) : mockDb.users.find((item) => item.id === userId);
   if (!user) return fail(res, "User not found", 404);
   const role = user.email?.toLowerCase() === "accountsdept@avavbusiness.com" ? "Accounts" : normalizeRole(user.role);
-  if (role !== user.role) {
+  if (c && role !== user.role) {
     await c.users.updateOne({ id: user.id }, { $set: { role, updatedAt: new Date() } });
   }
-  const permissions = await permissionsForRole(role);
+  const permissions = await permissionsForRole(role, c);
   const { passwordHash: _, ...safeUser } = user as any;
   return ok(res, { ...safeUser, role, permissions });
 });
