@@ -7,7 +7,7 @@ exports.isActiveComplaintStatus = isActiveComplaintStatus;
 exports.isWaitingLobbyComplaint = isWaitingLobbyComplaint;
 exports.isActiveWorkComplaint = isActiveWorkComplaint;
 exports.MAX_ACTIVE_SERVICE_TICKETS = 5;
-exports.MAX_WAITING_LOBBY_TICKETS = 5;
+exports.MAX_WAITING_LOBBY_TICKETS = 999999;
 exports.ACTIVE_TICKET_STATUSES = [
     "New",
     "Assigned",

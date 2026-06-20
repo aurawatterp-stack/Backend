@@ -40,8 +40,15 @@ function loadEnvFileIfPresent(filePath: string, options: { override?: boolean } 
 }
 
 const backendRoot = path.resolve(__dirname, "..");
-loadEnvFileIfPresent(path.resolve(process.cwd(), ".env"));
-loadEnvFileIfPresent(path.resolve(backendRoot, ".env"), { override: true });
+const isServerless = Boolean(process.env.VERCEL);
+
+// In local development we can safely read `.env` files from disk.
+// In Vercel/serverless runtime the filesystem is read-only and repo-local
+// `.env` files can accidentally override the real deployment environment.
+if (!isServerless) {
+  loadEnvFileIfPresent(path.resolve(process.cwd(), ".env"));
+  loadEnvFileIfPresent(path.resolve(backendRoot, ".env"), { override: true });
+}
 
 function cleanSecretEnv(name: string): string {
   const raw = process.env[name] ?? "";
@@ -108,8 +115,6 @@ function corsOriginsFromEnv(raw: string | undefined): string | string[] | boolea
 
   return origins.length === 1 ? origins[0] : origins;
 }
-
-const isServerless = Boolean(process.env.VERCEL);
 
 // Vercel (and most serverless platforms) has a read-only filesystem, except `/tmp`.
 // Any disk uploads must go to `/tmp` or an external object store.

@@ -27,9 +27,31 @@ const engineerAssignments_1 = __importDefault(require("./routes/engineerAssignme
 const boms_1 = __importDefault(require("./routes/boms"));
 const geo_1 = __importDefault(require("./routes/geo"));
 const app = (0, express_1.default)();
+function createCorsOptions() {
+    const allowed = config_1.CONFIG.CORS_ORIGIN;
+    return {
+        origin: (requestOrigin, callback) => {
+            if (!requestOrigin)
+                return callback(null, true);
+            if (allowed === true)
+                return callback(null, true);
+            if (typeof allowed === "string")
+                return callback(null, requestOrigin === allowed);
+            if (Array.isArray(allowed))
+                return callback(null, allowed.includes(requestOrigin));
+            callback(new Error(`Origin ${requestOrigin} not allowed by CORS`));
+        },
+        credentials: true,
+        methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+        allowedHeaders: ["Authorization", "Content-Type", "Accept"],
+        optionsSuccessStatus: 204,
+    };
+}
 // Global middleware
 app.use((0, helmet_1.default)());
-app.use((0, cors_1.default)({ origin: config_1.CONFIG.CORS_ORIGIN, credentials: true }));
+const corsOptions = createCorsOptions();
+app.use((0, cors_1.default)(corsOptions));
+app.options("*", (0, cors_1.default)(corsOptions));
 app.use(express_1.default.json());
 app.use(express_1.default.urlencoded({ extended: true }));
 app.use((0, morgan_1.default)("dev"));

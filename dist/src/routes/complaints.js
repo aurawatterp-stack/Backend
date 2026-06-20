@@ -449,6 +449,51 @@ async function releaseNextWaitingTicket(identities = [], level) {
     const remaining = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
     await Promise.all(remaining.map((complaint, index) => c.complaints.updateOne({ id: complaint.id }, { $set: { queuePosition: index + 1, updatedAt: new Date() } })));
 }
+/**
+ * Like releaseNextWaitingTicket but excludes `excludeId` from the active count
+ * so that exactly one slot appears free for the promotion check. Used after
+ * manually starting SLA on a ticket so the active lobby auto-tops up to 5.
+ */
+async function releaseNextWaitingTicketExcluding(identities = [], level, excludeId) {
+    const c = await (0, collections_1.getCollections)();
+    const filter = { assignmentStatus: "Waiting", status: "Waiting Lobby" };
+    if (level)
+        filter.escalationLevel = level;
+    const identityFilter = buildEngineerIdentityFilter(identities);
+    if (identityFilter.length) {
+        filter.$or = identityFilter;
+    }
+    // Promote at most one ticket (the SLA-start freed one slot).
+    const waiting = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
+    if (!waiting.length)
+        return;
+    const next = waiting[0];
+    const nextLevel = normalizeServiceLevel(next.escalationLevel);
+    const assignment = await buildServiceAssignment({
+        level: nextLevel,
+        issueDescription: next.issueDescription,
+        siteLocation: next.siteLocation,
+        region: next.region,
+        state: next.state,
+        district: next.district,
+        priority: next.priority,
+        l1Sla: next.l1Sla,
+        excludeComplaintId: excludeId ?? next.id, // exclude the SLA-started ticket from count
+        preferredEngineerId: next.assignedEngineerId,
+        preferredEngineerName: next.assignedEngineerName,
+        preferredEngineerEmail: next.assignedEngineerId,
+    });
+    if (!assignment.blockedMessage && assignment.assignmentStatus === "Assigned") {
+        const promotedAt = new Date();
+        await c.complaints.updateOne({ id: next.id }, {
+            $set: { ...assignment, updatedAt: promotedAt },
+            $unset: { waitingSince: "", queuePosition: "" },
+        });
+    }
+    // Renumber remaining waiting tickets.
+    const remaining = sortWaitingLobbyTickets(await c.complaints.find(filter).toArray());
+    await Promise.all(remaining.map((complaint, index) => c.complaints.updateOne({ id: complaint.id }, { $set: { queuePosition: index + 1, updatedAt: new Date() } })));
+}
 async function rebalanceWaitingLobby() {
     const c = await (0, collections_1.getCollections)();
     const waitingRows = await c.complaints
@@ -902,13 +947,13 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
             district: complaint.district ?? String(complaintDistrict ?? ""),
             assignedEngineerId: complaint.assignedEngineerId,
             assignedEngineerName: complaint.assignedEngineerName ?? "",
-            assignmentType: assignmentDecision.assignmentType,
-            assignmentReason: assignmentDecision.assignmentReason,
-            activeTicketCountAtAssignment: assignmentDecision.activeTicketCountAtAssignment,
-            lobbyTicketCountAtAssignment: assignmentDecision.lobbyTicketCountAtAssignment,
-            totalTicketCountAtAssignment: assignmentDecision.totalTicketCountAtAssignment,
-            assignmentStatus: assignmentDecision.assignmentStatus,
-            status: assignmentDecision.status,
+            assignmentType: assignmentDecision.assignmentType || "Primary L1",
+            assignmentReason: assignmentDecision.assignmentReason || "Assigned via buildAssignment",
+            activeTicketCountAtAssignment: assignmentDecision.activeTicketCountAtAssignment || 0,
+            lobbyTicketCountAtAssignment: assignmentDecision.lobbyTicketCountAtAssignment || 0,
+            totalTicketCountAtAssignment: assignmentDecision.totalTicketCountAtAssignment || 0,
+            assignmentStatus: assignmentDecision.assignmentStatus || "Assigned",
+            status: assignmentDecision.status || "Assigned to Engineer",
             createdBy: user.userId,
             lastUpdatedBy: user.userId,
             backupEngineerName: assignmentDecision.backupEngineerName,
@@ -929,18 +974,27 @@ router.post("/:id/start-sla", auth_1.authenticate, (0, auth_1.requireAnyPermissi
         return (0, http_1.fail)(res, "Complaint not found", 404);
     if (complaint.slaStartedAt)
         return (0, http_1.fail)(res, "SLA timer has already started for this complaint.", 400);
+    // Only active-lobby tickets (assignmentStatus === "Assigned") can have SLA started.
+    if (complaint.assignmentStatus === "Waiting" || complaint.status === "Waiting Lobby") {
+        return (0, http_1.fail)(res, "SLA cannot be started for a Waiting Lobby ticket. It must first be promoted to Active.", 400);
+    }
     const now = new Date();
-    // Default to L1 (24 hours) if no escalation level is found.
-    const level = complaint.escalationLevel || "L1";
+    // Default to L1 (4 hours) if no escalation level is found.
+    const level = (complaint.escalationLevel || "L1");
     const slaHours = slaHoursForLevel(level);
     await c.complaints.updateOne({ id }, {
         $set: {
             slaStartedAt: now,
             slaDueAt: addHours(now, slaHours),
             slaPaused: false,
-            updatedAt: now
-        }
+            updatedAt: now,
+        },
     });
+    // Auto-refill the active lobby: after SLA is started on this ticket,
+    // promote the next waiting-lobby ticket so the active queue stays at 5.
+    // We exclude this complaint from the active count so releaseNextWaitingTicket
+    // sees one free slot and promotes exactly one waiting ticket.
+    await releaseNextWaitingTicketExcluding([{ engineerId: complaint.assignedEngineerId, engineerName: complaint.assignedEngineerName }], normalizeServiceLevel(complaint.escalationLevel), complaint.id);
     const updated = await c.complaints.findOne({ id });
     return (0, http_1.ok)(res, updated);
 });
