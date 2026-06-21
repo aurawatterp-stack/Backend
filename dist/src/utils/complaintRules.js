@@ -6,8 +6,8 @@ exports.isClosedComplaintStatus = isClosedComplaintStatus;
 exports.isActiveComplaintStatus = isActiveComplaintStatus;
 exports.isWaitingLobbyComplaint = isWaitingLobbyComplaint;
 exports.isActiveWorkComplaint = isActiveWorkComplaint;
-exports.MAX_ACTIVE_SERVICE_TICKETS = 5;
-exports.MAX_WAITING_LOBBY_TICKETS = 999999;
+exports.MAX_ACTIVE_SERVICE_TICKETS = 10;
+exports.MAX_WAITING_LOBBY_TICKETS = 10;
 exports.ACTIVE_TICKET_STATUSES = [
     "New",
     "Assigned",
@@ -33,7 +33,7 @@ exports.CLOSED_COMPLAINT_STATUSES = [
     "Resolved by Suppliers",
 ];
 exports.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE = "An active complaint already exists for this serial number. Please wait until the current ticket is resolved or closed before creating a new complaint for the same serial number.";
-exports.ENGINEER_CAPACITY_MESSAGE = "The selected engineer has reached the maximum ticket capacity (5 Active Work + 5 Waiting Lobby tickets). Please assign this ticket to another engineer.";
+exports.ENGINEER_CAPACITY_MESSAGE = "The selected engineer has reached the maximum ticket capacity (10 Active Work + 10 Waiting Lobby tickets). Please assign this ticket to another engineer.";
 exports.ONSITE_CAPACITY_MESSAGE = "Selected engineer already has 5 active onsite inspection tickets. Please select another engineer.";
 function normalizeComplaintSerialKey(value) {
     return String(value ?? "").trim().toLowerCase().replace(/\s+/g, " ");

@@ -93,21 +93,6 @@ const l1Engineers = [
 ];
 const serviceEngineers = [
     ...l1Engineers,
-    ...l1Engineers.map((account) => {
-        const localPart = account.email.split("@")[0].replace(/^l1\./i, "");
-        const backupLocalPart = `${localPart}.backup`;
-        const backupEmail = `${backupLocalPart}@avavbusiness.com`;
-        return {
-            id: `u-l1-${backupLocalPart.replace(/[^a-z0-9]+/gi, "-").replace(/^-+|-+$/g, "")}`,
-            email: backupEmail,
-            password: `${account.name.replace(/\s+/g, "")}Backup@123`,
-            name: `${account.name} Backup`,
-            mobile: account.mobile,
-            role: "L1 Engineer",
-            engineerMasterName: `${account.name} Backup`,
-            engineerMasterRole: "Backup",
-        };
-    }),
     {
         id: "u-l2-naveen-maurya",
         email: "l2.naveen.maurya@avavbusiness.com",

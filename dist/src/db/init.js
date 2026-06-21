@@ -195,11 +195,9 @@ async function initDatabase() {
                 id: (0, id_1.generateId)(),
                 name,
                 isSystem: true,
+                permissions,
                 createdAt: now,
                 updatedAt: now,
-            },
-            $addToSet: {
-                permissions: { $each: permissions },
             },
         }, { upsert: true });
     }

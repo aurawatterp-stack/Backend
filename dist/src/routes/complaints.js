@@ -10,6 +10,7 @@ const auth_1 = require("../middleware/auth");
 const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
+const serialLifecycle_1 = require("../utils/serialLifecycle");
 const engineerAssignments_1 = require("../services/engineerAssignments");
 const ticketRouting_1 = require("../services/ticketRouting");
 const complaintRules_1 = require("../utils/complaintRules");
@@ -108,6 +109,28 @@ const ASSIGNABLE_SERVICE_ENGINEER_EMAILS = new Set([
 ]);
 function normalizeText(value) {
     return String(value ?? "").trim();
+}
+function normalizeSpareRequestParts(input) {
+    if (!Array.isArray(input))
+        return [];
+    return input
+        .map((part, index) => {
+        const materialName = normalizeText(part?.materialName ?? part?.name ?? part?.sparePartName ?? part?.partName);
+        const quantity = Number(part?.quantity);
+        if (!materialName || !Number.isFinite(quantity) || quantity <= 0)
+            return null;
+        const availableQuantity = Number(part?.availableQuantity);
+        return {
+            id: normalizeText(part?.id) || `${Date.now()}-${index}`,
+            series: normalizeText(part?.series) || undefined,
+            rawMaterialId: normalizeText(part?.rawMaterialId) || undefined,
+            materialName,
+            availableQuantity: Number.isFinite(availableQuantity) ? availableQuantity : undefined,
+            quantity,
+            notes: normalizeText(part?.notes) || undefined,
+        };
+    })
+        .filter(Boolean);
 }
 function normalizeLookup(value) {
     return normalizeText(value).toLowerCase().replace(/\s+/g, " ");
@@ -708,7 +731,7 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaint
             return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
         }
         const p = Math.max(1, parseInt(page));
-        const l = Math.min(100, parseInt(limit));
+        const l = Math.min(1000, parseInt(limit));
         const total = await c.complaints.countDocuments(scopedFilter);
         const data = await c.complaints.find(scopedFilter).skip((p - 1) * l).limit(l).toArray();
         return (0, http_1.ok)(res, { data, total, page: p, limit: l });
@@ -772,7 +795,7 @@ router.post("/upload-inverter-picture", auth_1.authenticate, (0, auth_1.requireA
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, state, district, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, dispatchLrCopyName, dispatchLrCopyUrl, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, siteVisitEngineerId, siteVisitEngineerName, siteVisitRequestedById, siteVisitRequestedByName, siteVisitRequestedByRole, siteVisitRequestedAt, siteVisitRemarks, siteVisitSpareParts, siteVisitScheduledDate, siteVisitAssignedById, siteVisitAssignedByName, siteVisitAssignedByRole, engineerName, l3SupportRequired, replacementReason, replacementRemarks, replacementRequestImages, replacementRequestedById, replacementRequestedByName, replacementRequestedByRole, replacementRequestedAt, replacementApprovedById, replacementApprovedByName, replacementApprovedByRole, replacementApprovedAt, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
+    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, state, district, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareParts, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, dispatchLrCopyName, dispatchLrCopyUrl, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, siteVisitEngineerId, siteVisitEngineerName, siteVisitRequestedById, siteVisitRequestedByName, siteVisitRequestedByRole, siteVisitRequestedAt, siteVisitRemarks, siteVisitSpareParts, siteVisitScheduledDate, siteVisitAssignedById, siteVisitAssignedByName, siteVisitAssignedByRole, engineerName, l3SupportRequired, replacementReason, replacementRemarks, replacementRequestImages, replacementRequestedById, replacementRequestedByName, replacementRequestedByRole, replacementRequestedAt, replacementApprovedById, replacementApprovedByName, replacementApprovedByRole, replacementApprovedAt, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
     const mobileNumber = req.body.mobileNumber ?? req.body.customerPhone;
     const customerEmail = (0, validation_1.normalizeEmailAddress)(req.body.customerEmail);
     const installationDate = req.body.installationDate ?? dateOfSale;
@@ -878,6 +901,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         spareName,
         spareQuantity: spareQuantity ? Number(spareQuantity) : undefined,
         spareDispatchAddress,
+        spareParts: normalizeSpareRequestParts(spareParts),
         spareInventoryStatus,
         spareRequestStatus,
         dispatchTrackingNo,
@@ -1098,6 +1122,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "spareName",
         "spareQuantity",
         "spareDispatchAddress",
+        "spareParts",
         "spareInventoryStatus",
         "spareRequestStatus",
         "dispatchTrackingNo",
@@ -1159,6 +1184,9 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     for (const field of allowedFields) {
         if (field in req.body)
             update[field] = req.body[field];
+    }
+    if ("spareParts" in req.body) {
+        update.spareParts = normalizeSpareRequestParts(req.body.spareParts);
     }
     if ((req.body.status === "In Progress at Aurawatt" || ("serviceStartedAt" in req.body && req.body.serviceStartedAt)) && !existing.serviceStartedAt) {
         update.serviceStartedAt = serverNow;
@@ -1440,6 +1468,20 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     }
     const isClosed = (0, complaintRules_1.isClosedComplaintStatus)(desiredStatus);
     const nextSerialKey = isClosed ? undefined : (0, complaintRules_1.normalizeComplaintSerialKey)(existing.productSerialNo) || undefined;
+    const nextStatus = String(update.status ?? existing.status);
+    const nextReplacementSerial = normalizeText(update.replacementSerialNo ?? existing.replacementSerialNo);
+    if (nextStatus === "Dispatch in Progress" && existing.productSerialNo) {
+        const originalSerial = await c.serials.findOne({ serialNumber: existing.productSerialNo }, { projection: { id: 1 } });
+        if (!originalSerial) {
+            return (0, http_1.fail)(res, "Original serial not found for replacement claim", 404);
+        }
+        if (nextReplacementSerial) {
+            const replacementSerial = await c.serials.findOne({ serialNumber: nextReplacementSerial }, { projection: { id: 1 } });
+            if (!replacementSerial) {
+                return (0, http_1.fail)(res, "Replacement serial not found in serial pool", 404);
+            }
+        }
+    }
     const setDoc = { ...update };
     if (nextSerialKey) {
         setDoc.productSerialNoKey = nextSerialKey;
@@ -1451,6 +1493,18 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         updateDoc.$unset = { productSerialNoKey: "" };
     }
     await c.complaints.updateOne({ id }, updateDoc);
+    if (nextStatus === "Dispatch in Progress" && existing.productSerialNo) {
+        await (0, serialLifecycle_1.updateSerialStatus)(c, {
+            serialNumber: existing.productSerialNo,
+            status: "Replacement Claimed",
+        });
+        if (nextReplacementSerial) {
+            await (0, serialLifecycle_1.updateSerialStatus)(c, {
+                serialNumber: nextReplacementSerial,
+                status: "Dispatched",
+            });
+        }
+    }
     if (isClosed && (0, complaintRules_1.isActiveWorkComplaint)(existing)) {
         try {
             await releaseNextWaitingTicket([

@@ -8,6 +8,7 @@ const collections_1 = require("../db/collections");
 const auth_1 = require("../middleware/auth");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
+const serialLifecycle_1 = require("../utils/serialLifecycle");
 const router = express_1.default.Router();
 function normalizeBomUsage(input) {
     if (!Array.isArray(input))
@@ -17,6 +18,9 @@ function normalizeBomUsage(input) {
         rawMaterialId: item.rawMaterialId ? String(item.rawMaterialId) : undefined,
         materialName: String(item.materialName ?? ""),
         batch: item.batch ? String(item.batch) : undefined,
+        inwardMode: item.inwardMode === "Local" || item.inwardMode === "International"
+            ? item.inwardMode
+            : undefined,
         invoiceNo: item.invoiceNo ? String(item.invoiceNo) : undefined,
         vendorName: item.vendorName ? String(item.vendorName) : undefined,
         quantityUsed: Number(item.quantityUsed) || 0,
@@ -31,6 +35,26 @@ function usageByRawMaterial(usage) {
         map.set(item.rawMaterialId, (map.get(item.rawMaterialId) ?? 0) + (Number(item.quantityUsed) || 0));
     }
     return map;
+}
+async function resolveManufacturingSerial(c, productSeriesId, requestedSerial) {
+    const serial = String(requestedSerial ?? "").trim();
+    if (serial) {
+        const existing = await c.serials.findOne({ serialNumber: serial, productSeriesId });
+        if (!existing)
+            return { error: "Serial number not found for the selected series" };
+        if (existing.status !== "Available")
+            return { error: "Selected serial is not available for manufacturing" };
+        return { serialNumber: serial };
+    }
+    const nextAvailable = await c.serials
+        .find({ productSeriesId, status: "Available" }, { projection: { serialNumber: 1 } })
+        .sort({ uploadedAt: 1 })
+        .limit(1)
+        .toArray();
+    const autoSerial = nextAvailable[0]?.serialNumber?.trim();
+    if (!autoSerial)
+        return { error: "No available serials found for this product series" };
+    return { serialNumber: autoSerial };
 }
 /** GET /api/manufactured — filter by status, model, dateFrom, dateTo, customer */
 router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "sales:entry", "complaints:consumer"), async (req, res) => {
@@ -54,54 +78,61 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { productId, serialNumber, mfgDate, status, invoiceNo, paymentStatus } = req.body;
-    if (!productId || !serialNumber || !mfgDate) {
-        return (0, http_1.fail)(res, "productId, serialNumber, mfgDate are required");
+    if (!productId || !mfgDate) {
+        return (0, http_1.fail)(res, "productId and mfgDate are required");
     }
-    const duplicate = await c.manufactured.findOne({ serialNumber }, { projection: { id: 1 } });
-    if (duplicate)
-        return (0, http_1.fail)(res, "This serial number already exists");
     const product = await c.products.findOne({ id: productId });
     if (!product)
         return (0, http_1.fail)(res, "Product model not found", 404);
-    const seriesBom = await c.boms.findOne({ series: product.series });
+    const productSeries = String(product.series ?? "").trim();
+    if (!productSeries)
+        return (0, http_1.fail)(res, "Product series not found for the selected model", 404);
+    const resolvedSerial = await resolveManufacturingSerial(c, productSeries, serialNumber);
+    if ("error" in resolvedSerial)
+        return (0, http_1.fail)(res, resolvedSerial.error ?? "Serial resolution failed");
+    const duplicate = await c.manufactured.findOne({ serialNumber: resolvedSerial.serialNumber }, { projection: { id: 1 } });
+    if (duplicate)
+        return (0, http_1.fail)(res, "This serial number already exists");
+    const seriesBom = await c.boms.findOne({ series: productSeries });
     const bomUsage = [];
     if (seriesBom && Array.isArray(seriesBom.items)) {
         for (const item of seriesBom.items) {
-            if (item.quantity <= 0)
+            const requiredQty = Number(item.quantity) || 0;
+            if (requiredQty <= 0)
                 continue;
             const rawMaterials = await c.rawMaterials
-                .find({ productSeriesId: product.series, materialName: item.materialName, quantityAvailable: { $gt: 0 } })
-                .sort({ dateReceived: 1 })
+                .find({ productSeriesId: productSeries, materialName: item.materialName, quantityAvailable: { $gt: 0 } })
+                .sort({ dateReceived: 1, createdAt: 1 })
                 .toArray();
-            let remainingRequired = 1; // User requested exactly 1 unit per item, regardless of BOM count
+            let remainingRequired = requiredQty;
             const deductions = [];
             for (const rm of rawMaterials) {
                 if (remainingRequired <= 0)
                     break;
                 const available = rm.quantityAvailable;
                 const toDeduct = Math.min(available, remainingRequired);
-                deductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName });
+                deductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName, batch: rm.batch, inwardMode: rm.inwardMode });
                 remainingRequired -= toDeduct;
                 bomUsage.push({
                     rawMaterialId: rm.id,
                     materialName: rm.materialName,
                     batch: rm.batch,
+                    inwardMode: rm.inwardMode,
                     invoiceNo: rm.referenceNo,
                     vendorName: rm.vendorName,
                     quantityUsed: toDeduct,
                 });
             }
             if (remainingRequired > 0) {
-                return (0, http_1.fail)(res, `Insufficient stock for Raw Material: ${item.materialName}. Required: 1, Available: 0`);
+                return (0, http_1.fail)(res, `Insufficient stock for Raw Material: ${item.materialName}. Required: ${requiredQty}, Available: ${requiredQty - remainingRequired}`);
             }
             for (const d of deductions) {
                 await c.rawMaterials.updateOne({ id: d.id }, { $inc: { quantityAvailable: -d.qty }, $set: { updatedAt: new Date() } });
-                // Log the raw material deduction
                 await c.inventoryLogs.insertOne({
                     id: (0, id_1.generateId)(),
                     type: "Manufacturing",
                     itemId: d.id,
-                    itemName: d.materialName,
+                    itemName: `${d.materialName} (${d.batch ?? "No Batch"}${d.inwardMode ? `, ${d.inwardMode}` : ""})`,
                     quantityChange: -d.qty,
                     referenceId: serialNumber,
                     notes: `Consumed for Manufacturing Serial: ${serialNumber}`,
@@ -118,7 +149,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
     const entry = {
         id: (0, id_1.generateId)(),
         productId,
-        serialNumber,
+        serialNumber: resolvedSerial.serialNumber,
         mfgDate: new Date(mfgDate),
         status: normalizedStatus,
         invoiceNo: invoiceNo ? String(invoiceNo) : undefined,
@@ -133,14 +164,18 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
         id: (0, id_1.generateId)(),
         type: "Manufacturing",
         itemId: entry.id,
-        itemName: `${product.series} ${product.model} (${serialNumber})`,
+        itemName: `${productSeries} ${product.model} (${resolvedSerial.serialNumber})`,
         quantityChange: 1,
-        referenceId: serialNumber,
+        referenceId: resolvedSerial.serialNumber,
         notes: `Produced new serial`,
         createdAt: new Date(),
         createdBy: req.user?.email || "System",
     });
-    await c.serials.updateOne({ serialNumber, productSeriesId: product.series }, { $set: { status: "Manufactured" } });
+    await (0, serialLifecycle_1.updateSerialStatus)(c, {
+        serialNumber: resolvedSerial.serialNumber,
+        productSeriesId: productSeries,
+        status: "Manufactured",
+    });
     return (0, http_1.ok)(res, entry, 201);
 });
 /** PUT /api/manufactured/:id/bom — modify BOM and adjust raw material stock by delta only */

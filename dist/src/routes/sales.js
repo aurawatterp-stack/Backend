@@ -10,6 +10,7 @@ const auth_1 = require("../middleware/auth");
 const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
+const serialLifecycle_1 = require("../utils/serialLifecycle");
 const router = express_1.default.Router();
 const MAX_DISPATCH_DOCKET_BYTES = 5 * 1024 * 1024;
 const dispatchDocketUpload = (0, multer_1.default)({
@@ -488,16 +489,22 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
         if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo)
             return (0, http_1.fail)(res, "This product is already sold");
         update.serialNumber = String(serialNumber);
-        await c.manufactured.updateOne({ id: mfg.id }, {
-            $set: {
-                status: "Sold",
-                invoiceNo: sale.referenceNo,
-                customerId: sale.customerId,
-                soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
-                paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
-                updatedAt: new Date(),
-            },
-        });
+        if (isDeliveryStatus) {
+            await c.manufactured.updateOne({ id: mfg.id }, {
+                $set: {
+                    status: "Sold",
+                    invoiceNo: sale.referenceNo,
+                    customerId: sale.customerId,
+                    soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
+                    paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
+                    updatedAt: new Date(),
+                },
+            });
+            await (0, serialLifecycle_1.updateSerialStatus)(c, {
+                serialNumber: String(serialNumber),
+                status: "Dispatched",
+            });
+        }
     }
     if (confirmedDispatchDate)
         update.confirmedDispatchDate = new Date(confirmedDispatchDate);
@@ -613,6 +620,10 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
                 paymentStatus: paymentStatus === "Confirmed" ? "Verified" : "Pending",
                 updatedAt,
             },
+        });
+        await (0, serialLifecycle_1.updateSerialStatus)(c, {
+            serialNumber: String(serialNumber),
+            status: "Sold",
         });
     }
     const sale = {

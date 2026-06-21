@@ -9,7 +9,7 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/boms — list all boms or filter by series */
-router.get("/", authenticate, requireAnyPermission("inventory:manufactured", "inventory:raw-materials", "dashboard:view"), async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("inventory:bom", "inventory:manufactured", "inventory:raw-materials", "dashboard:view"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const series = req.query.series as string | undefined;
   const filter = series ? { series } : {};
@@ -18,7 +18,7 @@ router.get("/", authenticate, requireAnyPermission("inventory:manufactured", "in
 });
 
 /** POST /api/boms — create a new BOM */
-router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("inventory:bom", "inventory:manufactured"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { series, items } = req.body;
   if (!series) return fail(res, "Series is required");
@@ -39,7 +39,7 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
 });
 
 /** PUT /api/boms/:id — update a BOM */
-router.put("/:id", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+router.put("/:id", authenticate, requireAnyPermission("inventory:bom", "inventory:manufactured"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
   const existing = await c.boms.findOne({ id });
@@ -53,7 +53,7 @@ router.put("/:id", authenticate, requireAnyPermission("inventory:manufactured"),
 });
 
 /** DELETE /api/boms/:id — delete a BOM */
-router.delete("/:id", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+router.delete("/:id", authenticate, requireAnyPermission("inventory:bom", "inventory:manufactured"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
   await c.boms.deleteOne({ id });

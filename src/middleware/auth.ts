@@ -33,8 +33,9 @@ async function permissionsForRole(role: RoleName, c?: Collections | null): Promi
   }
 
   const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
-  const defaults = DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? [];
-  const perms = Array.from(new Set([...(doc?.permissions ?? []), ...defaults])) as Permission[];
+  const perms = doc
+    ? (Array.from(new Set([...(doc.permissions ?? [])])) as Permission[])
+    : ((DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? []) as Permission[]);
   rolePermCache.set(role, { perms, expiresAt: now + 30_000 });
   return perms;
 }

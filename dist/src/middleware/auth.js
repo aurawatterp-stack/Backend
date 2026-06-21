@@ -11,21 +11,35 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const config_1 = require("../config");
 const rbac_1 = require("../rbac");
 const collections_1 = require("../db/collections");
+const mockDb_1 = require("../db/mockDb");
 const http_1 = require("../utils/http");
 /**
  * Attach decoded JWT to `req.user`.
  * Protected routes call this before their handler.
  */
 const rolePermCache = new Map();
-async function permissionsForRole(role) {
+async function tryGetCollections() {
+    try {
+        return await (0, collections_1.getCollections)();
+    }
+    catch {
+        return null;
+    }
+}
+async function permissionsForRole(role, c) {
     const now = Date.now();
     const cached = rolePermCache.get(role);
     if (cached && cached.expiresAt > now)
         return cached.perms;
-    const c = await (0, collections_1.getCollections)();
+    if (!c) {
+        const perms = Array.from(new Set([...(rbac_1.DEFAULT_ROLE_PERMISSIONS[role] ?? [])]));
+        rolePermCache.set(role, { perms, expiresAt: now + 30_000 });
+        return perms;
+    }
     const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
-    const defaults = rbac_1.DEFAULT_ROLE_PERMISSIONS[role] ?? [];
-    const perms = Array.from(new Set([...(doc?.permissions ?? []), ...defaults]));
+    const perms = doc
+        ? Array.from(new Set([...(doc.permissions ?? [])]))
+        : (rbac_1.DEFAULT_ROLE_PERMISSIONS[role] ?? []);
     rolePermCache.set(role, { perms, expiresAt: now + 30_000 });
     return perms;
 }
@@ -38,9 +52,11 @@ async function authenticate(req, res, next) {
     try {
         const decoded = jsonwebtoken_1.default.verify(token, config_1.CONFIG.JWT_SECRET);
         const role = (0, rbac_1.normalizeRole)(decoded.role);
-        const permissions = await permissionsForRole(role);
-        const c = await (0, collections_1.getCollections)();
-        const user = await c.users.findOne({ id: decoded.userId }, { projection: { name: 1 } });
+        const c = await tryGetCollections();
+        const permissions = await permissionsForRole(role, c);
+        const user = c
+            ? await c.users.findOne({ id: decoded.userId }, { projection: { name: 1 } })
+            : mockDb_1.db.users.find((item) => item.id === decoded.userId || item.email.toLowerCase() === decoded.email.toLowerCase());
         req.user = { ...decoded, role, permissions, name: user?.name };
         next();
     }

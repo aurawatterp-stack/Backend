@@ -8,6 +8,7 @@ export const ALL_PERMISSIONS: Permission[] = [
   "distributors:manage",
   "inventory:serials",
   "inventory:products",
+  "inventory:bom",
   "inventory:raw-materials",
   "inventory:manufactured",
   "sales:entry",
@@ -34,7 +35,7 @@ export const SYSTEM_ROLES: SystemRoleName[] = [
 
 export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
   Admin: ALL_PERMISSIONS,
-  Inventory: ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured"],
+  Inventory: ["dashboard:view", "inventory:serials", "inventory:products", "inventory:bom", "inventory:raw-materials", "inventory:manufactured"],
   Sales: ["dashboard:view", "sales:entry"],
   Dispatch: ["dashboard:view", "dispatch:manage"],
   Accounts: ["dashboard:view", "accounts:manage"],
@@ -43,14 +44,14 @@ export const DEFAULT_ROLE_PERMISSIONS: Record<SystemRoleName, Permission[]> = {
 
   "L2 Technical Team": ["dashboard:view", "complaints:consumer"],
   "L3 Advanced OEM Support": ["dashboard:view", "complaints:consumer", "complaints:supplier"],
-  "Warehouse Team": ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured", "dispatch:manage"],
+  "Warehouse Team": ["dashboard:view", "inventory:serials", "inventory:products", "inventory:bom", "inventory:raw-materials", "inventory:manufactured", "dispatch:manage"],
   "Accounts Team": ["dashboard:view", "accounts:manage", "complaints:consumer", "complaints:supplier"],
   Dealer: ["dashboard:view", "complaints:consumer"],
 };
 
 export const ROLE_ALIASES: Record<SystemRoleName, UserRole[]> = {
   Admin: ["Admin"],
-  Inventory: ["Inventory", "Inventory Manager"],
+  Inventory: ["Inventory", "Inventory Team", "Inventory Manager"],
   Sales: ["Sales", "Sales Manager"],
   Dispatch: ["Dispatch", "Dispatch Team"],
   Accounts: ["Accounts", "Accounts Team", "Accounts Manager"],
@@ -80,7 +81,7 @@ export function normalizeRole(input: unknown): RoleName {
   const key = raw.toLowerCase();
 
   if (key === "admin") return "Admin";
-  if (key === "inventory" || key === "inventory manager") return "Inventory";
+  if (key === "inventory" || key === "inventory team" || key === "inventory manager") return "Inventory";
   if (key === "sales" || key === "sales manager") return "Sales";
   if (key === "dispatch" || key === "dispatch team") return "Dispatch";
   if (key === "accounts" || key === "accounts manager") return "Accounts";

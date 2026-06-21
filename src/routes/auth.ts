@@ -21,18 +21,69 @@ async function tryGetCollections(): Promise<Collections | null> {
 }
 
 async function permissionsForRole(role: RoleName, c?: Collections | null): Promise<Permission[]> {
-  if (role === "Admin") return [];
   if (!c) {
     return (DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? []) as Permission[];
   }
 
   const doc = await c.roles.findOne({ name: role }, { projection: { permissions: 1 } });
-  const defaults = DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? [];
-  return Array.from(new Set([...(doc?.permissions ?? []), ...defaults])) as Permission[];
+  if (!doc) {
+    return (DEFAULT_ROLE_PERMISSIONS[role as keyof typeof DEFAULT_ROLE_PERMISSIONS] ?? []) as Permission[];
+  }
+  return Array.from(new Set([...(doc.permissions ?? [])])) as Permission[];
 }
 
 async function resolveLoginUser(email: string, password: string, c: Collections | null): Promise<User | null> {
   const demoUser = mockDb.users.find((item) => item.email.toLowerCase() === email);
+  const now = new Date();
+
+  if (demoUser) {
+    const demoPasswordValid = await bcrypt.compare(password, demoUser.passwordHash);
+    if (demoPasswordValid) {
+      const canonicalRole = normalizeRole(demoUser.role);
+
+      if (!c) {
+        return { ...demoUser, email, role: canonicalRole, isActive: true, updatedAt: now } as User;
+      }
+
+      const existingUser = await c.users.findOne({ email });
+      const nextUser = {
+        ...(existingUser ?? demoUser),
+        email,
+        passwordHash: demoUser.passwordHash,
+        name: existingUser?.name || demoUser.name,
+        mobile: existingUser?.mobile || demoUser.mobile,
+        role: canonicalRole,
+        isActive: true,
+        updatedAt: now,
+      } as User;
+
+      if (existingUser) {
+        await c.users.updateOne(
+          { id: existingUser.id },
+          {
+            $set: {
+              passwordHash: nextUser.passwordHash,
+              name: nextUser.name,
+              mobile: nextUser.mobile,
+              role: nextUser.role,
+              isActive: true,
+              updatedAt: now,
+            },
+          }
+        );
+      } else {
+        await c.users.insertOne({
+          ...demoUser,
+          email,
+          role: canonicalRole,
+          isActive: true,
+          updatedAt: now,
+        });
+      }
+
+      return nextUser;
+    }
+  }
 
   if (!c) {
     if (!demoUser) return null;
@@ -48,7 +99,6 @@ async function resolveLoginUser(email: string, password: string, c: Collections 
     if (!demoUser) return null;
     const demoPasswordValid = await bcrypt.compare(password, demoUser.passwordHash);
     if (!demoPasswordValid) return null;
-    const now = new Date();
     const nextUser = { ...demoUser, email, role: normalizeRole(demoUser.role), isActive: true, updatedAt: now } as User;
     await c.users.insertOne(nextUser);
     return nextUser;

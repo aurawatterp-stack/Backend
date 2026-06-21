@@ -13,6 +13,7 @@ exports.ALL_PERMISSIONS = [
     "distributors:manage",
     "inventory:serials",
     "inventory:products",
+    "inventory:bom",
     "inventory:raw-materials",
     "inventory:manufactured",
     "sales:entry",
@@ -29,7 +30,6 @@ exports.SYSTEM_ROLES = [
     "Accounts",
     "Distributor",
     "L1 Engineer",
-    "L1 Backup Engineer",
     "L2 Technical Team",
     "L3 Advanced OEM Support",
     "Warehouse Team",
@@ -38,28 +38,26 @@ exports.SYSTEM_ROLES = [
 ];
 exports.DEFAULT_ROLE_PERMISSIONS = {
     Admin: exports.ALL_PERMISSIONS,
-    Inventory: ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured"],
+    Inventory: ["dashboard:view", "inventory:serials", "inventory:products", "inventory:bom", "inventory:raw-materials", "inventory:manufactured"],
     Sales: ["dashboard:view", "sales:entry"],
     Dispatch: ["dashboard:view", "dispatch:manage"],
     Accounts: ["dashboard:view", "accounts:manage"],
     Distributor: ["dashboard:view"],
     "L1 Engineer": ["dashboard:view", "complaints:consumer"],
-    "L1 Backup Engineer": ["dashboard:view", "complaints:consumer"],
     "L2 Technical Team": ["dashboard:view", "complaints:consumer"],
     "L3 Advanced OEM Support": ["dashboard:view", "complaints:consumer", "complaints:supplier"],
-    "Warehouse Team": ["dashboard:view", "inventory:serials", "inventory:products", "inventory:raw-materials", "inventory:manufactured", "dispatch:manage"],
+    "Warehouse Team": ["dashboard:view", "inventory:serials", "inventory:products", "inventory:bom", "inventory:raw-materials", "inventory:manufactured", "dispatch:manage"],
     "Accounts Team": ["dashboard:view", "accounts:manage", "complaints:consumer", "complaints:supplier"],
     Dealer: ["dashboard:view", "complaints:consumer"],
 };
 exports.ROLE_ALIASES = {
     Admin: ["Admin"],
-    Inventory: ["Inventory", "Inventory Manager"],
+    Inventory: ["Inventory", "Inventory Team", "Inventory Manager"],
     Sales: ["Sales", "Sales Manager"],
     Dispatch: ["Dispatch", "Dispatch Team"],
     Accounts: ["Accounts", "Accounts Team", "Accounts Manager"],
     Distributor: ["Distributor"],
     "L1 Engineer": ["L1 Engineer", "Service", "Service Manager", "Support L1"],
-    "L1 Backup Engineer": ["L1 Backup Engineer", "L1 Backup", "Backup Engineer", "Backup"],
     "L2 Technical Team": ["L2 Technical Team", "Support L2", "Technical Team"],
     "L3 Advanced OEM Support": ["L3 Advanced OEM Support", "Support L3", "OEM Support"],
     "Warehouse Team": ["Warehouse Team", "Warehouse", "Inventory Team"],
@@ -80,7 +78,7 @@ function normalizeRole(input) {
     const key = raw.toLowerCase();
     if (key === "admin")
         return "Admin";
-    if (key === "inventory" || key === "inventory manager")
+    if (key === "inventory" || key === "inventory team" || key === "inventory manager")
         return "Inventory";
     if (key === "sales" || key === "sales manager")
         return "Sales";
@@ -95,7 +93,7 @@ function normalizeRole(input) {
     if (key === "service" || key === "service manager" || key === "l1" || key === "l1 engineer" || key === "support l1")
         return "L1 Engineer";
     if (key === "backup" || key === "l1 backup engineer" || key === "l1 backup" || key === "backup engineer")
-        return "L1 Backup Engineer";
+        return "L1 Engineer";
     if (key === "l2" || key === "l2 technical team" || key === "support l2" || key === "technical team")
         return "L2 Technical Team";
     if (key === "l3" || key === "l3 advanced oem support" || key === "support l3" || key === "oem support")

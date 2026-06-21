@@ -10,7 +10,7 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
 /** GET /api/boms — list all boms or filter by series */
-router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "inventory:raw-materials", "dashboard:view"), async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:bom", "inventory:manufactured", "inventory:raw-materials", "dashboard:view"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const series = req.query.series;
     const filter = series ? { series } : {};
@@ -18,7 +18,7 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory
     return (0, http_1.ok)(res, boms);
 });
 /** POST /api/boms — create a new BOM */
-router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:bom", "inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { series, items } = req.body;
     if (!series)
@@ -38,7 +38,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
     return (0, http_1.ok)(res, bom, 201);
 });
 /** PUT /api/boms/:id — update a BOM */
-router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
+router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:bom", "inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     const existing = await c.boms.findOne({ id });
@@ -50,7 +50,7 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("invent
     return (0, http_1.ok)(res, { ...existing, items: Array.isArray(items) ? items : [], updatedAt });
 });
 /** DELETE /api/boms/:id — delete a BOM */
-router.delete("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
+router.delete("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:bom", "inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const id = req.params.id;
     await c.boms.deleteOne({ id });

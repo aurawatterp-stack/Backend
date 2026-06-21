@@ -216,7 +216,7 @@ function seedEngineerAssignmentDocument(row) {
         district: row.district,
         l1EngineerId: engineerMasterId(row.l1EngineerName, "L1"),
         l2EngineerId: engineerMasterId(row.l2EngineerName, "L2"),
-        l1BackupEngineerId: engineerMasterId(row.l1BackupEngineerName, "Backup"),
+        l1BackupEngineerId: engineerMasterId(row.l1BackupEngineerName, "L1"),
         source: "seeded-workbook",
         createdAt: now,
         updatedAt: now,
@@ -337,10 +337,11 @@ async function listEngineerAssignmentOptions() {
         c.engineerAssignments.find({}).sort({ state: 1, district: 1 }).toArray(),
         c.engineerMasters.find({}).sort({ role: 1, name: 1 }).toArray(),
     ]);
+    const visibleEngineers = masters.filter((row) => row.role !== "Backup" && !/backup/i.test(row.name));
     return {
         states: Array.from(new Set(assignments.map((row) => row.state))).sort((a, b) => a.localeCompare(b)),
         districts: Array.from(new Set(assignments.map((row) => row.district))).sort((a, b) => a.localeCompare(b)),
-        engineers: masters.map((row) => ({ id: row.id, name: row.name, role: row.role, email: row.email ?? "", mobile: row.mobile ?? "" })),
+        engineers: visibleEngineers.map((row) => ({ id: row.id, name: row.name, role: row.role, email: row.email ?? "", mobile: row.mobile ?? "" })),
     };
 }
 async function countTicketLoadForEngineer(engineerId, engineerName, excludeComplaintId) {
@@ -404,7 +405,7 @@ async function createOrUpdateEngineerAssignment(input, actor) {
     const [l1, l2, backup] = await Promise.all([
         ensureEngineerMasterRecord(row.l1EngineerName, "L1"),
         ensureEngineerMasterRecord(row.l2EngineerName, "L2"),
-        ensureEngineerMasterRecord(row.l1BackupEngineerName, "Backup"),
+        ensureEngineerMasterRecord(row.l1BackupEngineerName, "L1"),
     ]);
     const now = new Date();
     const next = {
@@ -413,7 +414,7 @@ async function createOrUpdateEngineerAssignment(input, actor) {
         district: row.district,
         l1EngineerId: l1?.id ?? engineerMasterId(row.l1EngineerName, "L1"),
         l2EngineerId: l2?.id ?? engineerMasterId(row.l2EngineerName, "L2"),
-        l1BackupEngineerId: backup?.id ?? engineerMasterId(row.l1BackupEngineerName, "Backup"),
+        l1BackupEngineerId: backup?.id ?? engineerMasterId(row.l1BackupEngineerName, "L1"),
         source: previous?.source ?? "manual",
         createdAt: previous?.createdAt ?? now,
         updatedAt: now,

@@ -23,6 +23,7 @@ export type Permission =
   | "distributors:manage"
   | "inventory:serials"
   | "inventory:products"
+  | "inventory:bom"
   | "inventory:raw-materials"
   | "inventory:manufactured"
   | "sales:entry"
