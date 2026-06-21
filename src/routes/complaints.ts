@@ -9,6 +9,7 @@ import type { AuthUser, Complaint, Notification } from "../types";
 import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
+import { updateSerialStatus } from "../utils/serialLifecycle";
 import { resolveAssignmentByStateDistrict } from "../services/engineerAssignments";
 import { recordTicketAssignmentLog, routeCustomerTicketByStateDistrict, refreshTicketLoadForAssignment } from "../services/ticketRouting";
 import {
@@ -1712,6 +1713,20 @@ router.put(
 
     const isClosed = isClosedComplaintStatus(desiredStatus);
     const nextSerialKey = isClosed ? undefined : normalizeComplaintSerialKey(existing.productSerialNo) || undefined;
+    const nextStatus = String(update.status ?? existing.status);
+    const nextReplacementSerial = normalizeText(update.replacementSerialNo ?? existing.replacementSerialNo);
+    if (nextStatus === "Dispatch in Progress" && existing.productSerialNo) {
+      const originalSerial = await c.serials.findOne({ serialNumber: existing.productSerialNo }, { projection: { id: 1 } });
+      if (!originalSerial) {
+        return fail(res, "Original serial not found for replacement claim", 404);
+      }
+      if (nextReplacementSerial) {
+        const replacementSerial = await c.serials.findOne({ serialNumber: nextReplacementSerial }, { projection: { id: 1 } });
+        if (!replacementSerial) {
+          return fail(res, "Replacement serial not found in serial pool", 404);
+        }
+      }
+    }
     const setDoc: Record<string, unknown> = { ...update };
     if (nextSerialKey) {
       setDoc.productSerialNoKey = nextSerialKey;
@@ -1724,6 +1739,18 @@ router.put(
     }
 
     await c.complaints.updateOne({ id }, updateDoc as any);
+    if (nextStatus === "Dispatch in Progress" && existing.productSerialNo) {
+      await updateSerialStatus(c, {
+        serialNumber: existing.productSerialNo,
+        status: "Replacement Claimed",
+      });
+      if (nextReplacementSerial) {
+        await updateSerialStatus(c, {
+          serialNumber: nextReplacementSerial,
+          status: "Dispatched",
+        });
+      }
+    }
 
     if (isClosed && isActiveWorkComplaint(existing)) {
       try {

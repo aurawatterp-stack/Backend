@@ -5,6 +5,7 @@ import { authenticate, requireAnyPermission } from "../middleware/auth";
 import type { ManufacturedProduct } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
+import { updateSerialStatus } from "../utils/serialLifecycle";
 
 const router: Router = express.Router();
 
@@ -194,10 +195,11 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
     createdBy: (req as any).user?.email || "System",
   });
 
-  await c.serials.updateOne(
-    { serialNumber: resolvedSerial.serialNumber, productSeriesId: productSeries },
-    { $set: { status: "Manufactured" } }
-  );
+  await updateSerialStatus(c, {
+    serialNumber: resolvedSerial.serialNumber,
+    productSeriesId: productSeries,
+    status: "Manufactured",
+  });
 
   return ok(res, entry, 201);
 });

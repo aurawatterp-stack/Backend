@@ -7,6 +7,7 @@ import type { AuthUser, Notification, Sale } from "../types";
 import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
+import { updateSerialStatus } from "../utils/serialLifecycle";
 
 const router: Router = express.Router();
 const MAX_DISPATCH_DOCKET_BYTES = 5 * 1024 * 1024;
@@ -574,19 +575,25 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo) return fail(res, "This product is already sold");
     update.serialNumber = String(serialNumber);
 
-    await c.manufactured.updateOne(
-      { id: mfg.id },
-      {
-        $set: {
-          status: "Sold",
-          invoiceNo: sale.referenceNo,
-          customerId: sale.customerId,
-          soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
-          paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
-          updatedAt: new Date(),
-        },
-      }
-    );
+    if (isDeliveryStatus) {
+      await c.manufactured.updateOne(
+        { id: mfg.id },
+        {
+          $set: {
+            status: "Sold",
+            invoiceNo: sale.referenceNo,
+            customerId: sale.customerId,
+            soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
+            paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
+            updatedAt: new Date(),
+          },
+        }
+      );
+      await updateSerialStatus(c, {
+        serialNumber: String(serialNumber),
+        status: "Dispatched",
+      });
+    }
   }
   if (confirmedDispatchDate) update.confirmedDispatchDate = new Date(confirmedDispatchDate);
   if (dispatchStatus !== undefined) update.dispatchStatus = dispatchStatus;
@@ -750,6 +757,10 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
         },
       }
     );
+    await updateSerialStatus(c, {
+      serialNumber: String(serialNumber),
+      status: "Sold",
+    });
   }
 
   const sale: Sale = {
