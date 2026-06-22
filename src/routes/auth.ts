@@ -158,7 +158,7 @@ router.post("/login", async (req: Request, res: Response) => {
 
   return ok(res, {
     token,
-    user: { id: user.id, name: user.name, email: user.email, role, permissions },
+    user: { id: user.id, name: user.name, email: user.email, role, permissions, mobile: user.mobile, assignedStates: (user as any).assignedStates ?? [] },
   });
 });
 
@@ -238,7 +238,7 @@ router.get("/me", authenticate, async (req: Request, res: Response) => {
   }
   const permissions = await permissionsForRole(role, c);
   const { passwordHash: _, ...safeUser } = user as any;
-  return ok(res, { ...safeUser, role, permissions });
+  return ok(res, { ...safeUser, role, permissions, assignedStates: safeUser.assignedStates ?? [] });
 });
 
 export default router;

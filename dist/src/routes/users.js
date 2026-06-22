@@ -12,6 +12,41 @@ const rbac_1 = require("../rbac");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const router = express_1.default.Router();
+function normalizeAssignedStates(value) {
+    if (!Array.isArray(value))
+        return [];
+    return Array.from(new Set(value.map((item) => String(item).trim()).filter(Boolean)));
+}
+/**
+ * POST /api/users
+ * Admin only. Create a new user account.
+ */
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("users:manage"), async (req, res) => {
+    const { name, email, mobile, role, password, isActive = true, assignedStates = [] } = req.body;
+    if (!name || !email || !mobile || !role || !password) {
+        return (0, http_1.fail)(res, "Name, email, mobile, role and password are required");
+    }
+    const c = await (0, collections_1.getCollections)();
+    const normalizedEmail = String(email).trim().toLowerCase();
+    const existing = await c.users.findOne({ email: normalizedEmail }, { projection: { id: 1 } });
+    if (existing)
+        return (0, http_1.fail)(res, "An account with this email already exists");
+    const newUser = {
+        id: (0, id_1.generateId)(),
+        email: normalizedEmail,
+        passwordHash: await bcryptjs_1.default.hash(String(password), config_1.CONFIG.BCRYPT_ROUNDS),
+        name: String(name).trim(),
+        mobile: String(mobile).trim(),
+        role: (0, rbac_1.normalizeRole)(role),
+        isActive: Boolean(isActive),
+        assignedStates: normalizeAssignedStates(assignedStates),
+        createdAt: new Date(),
+        updatedAt: new Date(),
+    };
+    await c.users.insertOne(newUser);
+    const { passwordHash: _, ...safeUser } = newUser;
+    return (0, http_1.ok)(res, safeUser, 201);
+});
 /**
  * GET /api/users
  * Admin only. Returns all users.
@@ -64,7 +99,7 @@ router.post("/approve/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission
  */
 router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("users:manage"), async (req, res) => {
     const { id } = req.params;
-    const { name, mobile, role, isActive, password } = req.body;
+    const { name, mobile, role, isActive, password, assignedStates } = req.body;
     const c = await (0, collections_1.getCollections)();
     const existing = await c.users.findOne({ id });
     if (!existing)
@@ -80,6 +115,8 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("users:
         update.isActive = Boolean(isActive);
     if (password)
         update.passwordHash = await bcryptjs_1.default.hash(password, config_1.CONFIG.BCRYPT_ROUNDS);
+    if (assignedStates !== undefined)
+        update.assignedStates = normalizeAssignedStates(assignedStates);
     await c.users.updateOne({ id }, { $set: update });
     const user = { ...existing, ...update };
     const { passwordHash: _, ...safeUser } = user;

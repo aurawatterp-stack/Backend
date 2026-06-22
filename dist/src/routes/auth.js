@@ -143,7 +143,7 @@ router.post("/login", async (req, res) => {
     const token = (0, jwt_1.signToken)({ userId: user.id, email: user.email, role });
     return (0, http_1.ok)(res, {
         token,
-        user: { id: user.id, name: user.name, email: user.email, role, permissions },
+        user: { id: user.id, name: user.name, email: user.email, role, permissions, mobile: user.mobile, assignedStates: user.assignedStates ?? [] },
     });
 });
 // Helpful guard for accidental GET hits (e.g. opening the URL in a browser).
@@ -217,6 +217,6 @@ router.get("/me", auth_1.authenticate, async (req, res) => {
     }
     const permissions = await permissionsForRole(role, c);
     const { passwordHash: _, ...safeUser } = user;
-    return (0, http_1.ok)(res, { ...safeUser, role, permissions });
+    return (0, http_1.ok)(res, { ...safeUser, role, permissions, assignedStates: safeUser.assignedStates ?? [] });
 });
 exports.default = router;

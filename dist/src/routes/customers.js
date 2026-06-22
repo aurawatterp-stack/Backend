@@ -197,18 +197,20 @@ function buildCustomerFromRow(row) {
     const email = pickField(row, ["email", "email id"]);
     const phone = pickField(row, ["phone", "mobile", "contact number", "contact no", "contact number"]);
     const address = pickField(row, ["address", "registered office address", "registered office address bill to", "bill to", "billing address"]);
-    if (!name || !email || !phone || !address)
+    if (!name)
         return null;
+    const rawDateOfRegistration = pickField(row, ["date of registration", "registration date"]);
+    const parsedDateOfRegistration = rawDateOfRegistration ? new Date(rawDateOfRegistration) : undefined;
     return stripUndefined({
         id: (0, id_1.generateId)(),
         name,
         type: normalizeCustomerType(pickField(row, ["type", "customer type", "distributorship type"])),
-        email: email.toLowerCase(),
+        email: email ? email.toLowerCase() : undefined,
         phone,
-        address,
+        address: address || undefined,
         stateRegion: pickField(row, ["state region", "state", "region"]) || undefined,
         registrationCode: pickField(row, ["registration code", "registration no", "registration number"]) || undefined,
-        dateOfRegistration: pickField(row, ["date of registration", "registration date"]) ? new Date(pickField(row, ["date of registration", "registration date"])) : undefined,
+        dateOfRegistration: parsedDateOfRegistration && !Number.isNaN(parsedDateOfRegistration.getTime()) ? parsedDateOfRegistration : undefined,
         gst: pickField(row, ["gst", "gstin", "gstin uin"]) || undefined,
         cinNo: pickField(row, ["cin no", "cin", "cinnumber"]) || undefined,
         pan: pickField(row, ["pan"]) || undefined,
@@ -460,7 +462,7 @@ router.post("/import-distributors", auth_1.authenticate, (0, auth_1.requireAnyPe
             const customer = buildCustomerFromRow(row);
             if (!customer) {
                 skipped += 1;
-                warnings.push("Skipped a row because required fields were missing.");
+                warnings.push("Skipped a row because the name was missing.");
                 continue;
             }
             const duplicateChecks = [];
@@ -503,7 +505,7 @@ router.post("/import-distributors", auth_1.authenticate, (0, auth_1.requireAnyPe
             const pending = buildPendingCustomerFromRow(row, user.userId);
             if (!pending) {
                 skipped += 1;
-                warnings.push(`${customer.name} skipped because pending data was incomplete.`);
+                warnings.push(`${customer.name} skipped because the row could not be mapped.`);
                 continue;
             }
             await c.pendingCustomerRegistrations.insertOne(pending);

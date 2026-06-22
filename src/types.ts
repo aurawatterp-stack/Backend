@@ -96,6 +96,7 @@ export type User = {
   mobile: string;
   role: UserRole;
   isActive: boolean;
+  assignedStates?: string[];
   createdAt: Date;
   updatedAt: Date;
 };

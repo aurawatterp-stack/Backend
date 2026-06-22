@@ -43,7 +43,7 @@ router.get("/", authenticate, requireAnyPermission("inventory:serials"), async (
   if (status) filter.status = status;
 
   const p = Math.max(1, parseInt(page));
-  const l = Math.min(200, parseInt(limit));
+  const l = Math.min(10000, parseInt(limit));
   const total = await c.serials.countDocuments(filter);
   const data = await c.serials.find(filter).skip((p - 1) * l).limit(l).toArray();
   return ok(res, { data, total, page: p, limit: l });
