@@ -23,6 +23,9 @@ import type {
   InventoryLog,
   SpareRequest,
   ReplacementRequest,
+  InwardMaster,
+  InwardItemDetail,
+  Counter,
 } from "../types";
 import { getMongoDb } from "./mongo";
 
@@ -49,6 +52,9 @@ export type Collections = {
   inventoryLogs: Collection<InventoryLog>;
   spareRequests: Collection<SpareRequest>;
   replacementRequests: Collection<ReplacementRequest>;
+  inwardMaster: Collection<InwardMaster>;
+  inwardItemDetails: Collection<InwardItemDetail>;
+  counters: Collection<Counter>;
 };
 
 export async function getCollections(): Promise<Collections> {
@@ -76,5 +82,8 @@ export async function getCollections(): Promise<Collections> {
     inventoryLogs: db.collection<InventoryLog>("inventoryLogs"),
     spareRequests: db.collection<SpareRequest>("spareRequests"),
     replacementRequests: db.collection<ReplacementRequest>("replacementRequests"),
+    inwardMaster: db.collection<InwardMaster>("inward_master"),
+    inwardItemDetails: db.collection<InwardItemDetail>("inward_item_details"),
+    counters: db.collection<Counter>("counters"),
   };
 }

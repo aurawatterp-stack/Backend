@@ -259,6 +259,37 @@ export type SeriesBOM = {
   updatedAt: Date;
 };
 
+export type InwardMode = "Local" | "International";
+
+export type InwardMaster = {
+  id: string;
+  inwardNo: string;
+  inwardMode: InwardMode;
+  batch: string;
+  vendorName: string;
+  dateReceived: Date;
+  billType: string;
+  referenceNo: string;
+  notes?: string;
+  createdAt: Date;
+  updatedAt: Date;
+  createdBy?: string;
+};
+
+export type InwardItemDetail = {
+  id: string;
+  inwardId: string;
+  productSeriesId: string;
+  materialName: string;
+  quantityReceived: number;
+  createdAt: Date;
+};
+
+export type Counter = {
+  id: string;
+  seq: number;
+};
+
 export type RawMaterial = {
   id: string;
   productSeriesId: string;
@@ -272,6 +303,7 @@ export type RawMaterial = {
   vendorName: string;
   batch: string;
   notes?: string;
+  inwardId?: string;
   createdAt: Date;
   updatedAt: Date;
 };
