@@ -27,5 +27,8 @@ async function getCollections() {
         inventoryLogs: db.collection("inventoryLogs"),
         spareRequests: db.collection("spareRequests"),
         replacementRequests: db.collection("replacementRequests"),
+        inwardMaster: db.collection("inward_master"),
+        inwardItemDetails: db.collection("inward_item_details"),
+        counters: db.collection("counters"),
     };
 }

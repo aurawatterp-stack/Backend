@@ -374,7 +374,7 @@ export type Sale = {
   dealerRegistered?: boolean;
   rjApprovalStatus?: "Not Required" | "Pending" | "Approved";
   forcePiPermission?: boolean;
-  priceCategory?: "Dealer Price" | "Distributor Price";
+  priceCategory?: "Dealer Price" | "Distributor Price" | "MSP" | "Manual";
   availableQuantity?: number;
   inventoryStatus?: "Available" | "Insufficient";
   forcePiApprovalStatus?: "Not Required" | "Pending" | "Approved";

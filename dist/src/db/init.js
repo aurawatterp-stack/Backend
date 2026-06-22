@@ -141,6 +141,8 @@ async function initDatabase() {
         c.ticketLoads,
         c.ticketAssignmentAudit,
         c.engineerAssignmentAudit,
+        c.inwardMaster,
+        c.inwardItemDetails,
     ]) {
         await ensureUniqueIndex(col, { id: 1 });
     }
@@ -149,6 +151,9 @@ async function initDatabase() {
     await ensureIndex(c.notifications, { createdAt: -1 });
     await ensureIndex(c.notifications, { audienceRoles: 1 });
     await ensureIndex(c.notifications, { audienceUserIds: 1 });
+    await ensureUniqueIndex(c.inwardMaster, { inwardNo: 1 });
+    await ensureIndex(c.inwardMaster, { batch: 1 });
+    await ensureIndex(c.inwardItemDetails, { inwardId: 1 });
     // Remove any pre-existing complaint serial index before we normalize old rows.
     // Otherwise the cleanup writes can trip the unique constraint before we get a
     // chance to repair the collection.

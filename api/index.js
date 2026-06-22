@@ -65,23 +65,25 @@ module.exports = (req, res) => {
       return res.end();
     }
 
-    // When routed via `vercel.json` we attach the original path as a query param.
-    // Use it to restore the original URL so Express routing works.
+    // When routed via `vercel.json`, `__path` contains the original request path.
+    // Prefer that value because Vercel's internal rewrite headers can point back
+    // at the function path itself (for example `/api/index.js`), which breaks
+    // Express route matching.
     if (req.query && typeof req.query.__path === "string") {
       const restored = `/${req.query.__path}`.replace(/\/{2,}/g, "/");
       req.url = restored;
       delete req.query.__path;
-    }
-    // If Vercel rewrote the request to this function, preserve the original pathname.
-    // Vercel provides the original URL in `x-vercel-rewrite` or `x-matched-path` (varies by runtime).
-    const original =
-      req.headers["x-vercel-rewrite"] ||
-      req.headers["x-forwarded-uri"] ||
-      req.headers["x-original-uri"] ||
-      req.headers["x-vercel-original-url"] ||
-      req.headers["x-matched-path"];
-    if (typeof original === "string" && original.startsWith("/")) {
-      req.url = original;
+    } else {
+      // Fallback for runtimes that don't provide `__path`: preserve the original pathname.
+      const original =
+        req.headers["x-vercel-rewrite"] ||
+        req.headers["x-forwarded-uri"] ||
+        req.headers["x-original-uri"] ||
+        req.headers["x-vercel-original-url"] ||
+        req.headers["x-matched-path"];
+      if (typeof original === "string" && original.startsWith("/")) {
+        req.url = original;
+      }
     }
     return app(req, res);
   } catch (err) {
