@@ -3,7 +3,7 @@ import multer from "multer";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
-import { execFileSync } from "node:child_process";
+import AdmZip from "adm-zip";
 
 import { getCollections } from "../db/collections";
 import { authenticate, requireAnyPermission } from "../middleware/auth";
@@ -85,8 +85,12 @@ function columnIndexFromRef(cellRef: string) {
 
 function readXmlFromXlsx(filePath: string, entryPath: string) {
   try {
-    return execFileSync("unzip", ["-p", filePath, entryPath], { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
-  } catch {
+    const zip = new AdmZip(filePath);
+    const entry = zip.getEntry(entryPath);
+    if (!entry) return "";
+    return entry.getData().toString("utf8");
+  } catch (err) {
+    console.warn(`Failed to read ${entryPath} from ${filePath}`, err);
     return "";
   }
 }
