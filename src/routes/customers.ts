@@ -199,7 +199,7 @@ function normalizeCustomerType(value: unknown) {
 }
 
 function buildCustomerFromRow(row: Record<string, string>) {
-  const name = pickField(row, ["name", "distributor name", "firm name", "company name"]);
+  const name = pickField(row, ["name", "distributor name", "firm name", "company name", "name distributor firm name"]);
   const email = pickField(row, ["email", "email id"]);
   const phone = pickField(row, ["phone", "mobile", "contact number", "contact no", "contact number"]);
   const address = pickField(row, ["address", "registered office address", "registered office address bill to", "bill to", "billing address"]);
