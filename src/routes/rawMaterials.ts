@@ -133,4 +133,31 @@ router.delete("/:id", authenticate, requireAnyPermission("inventory:raw-material
   return ok(res, { message: "Raw material entry deleted" });
 });
 
+/** POST /api/raw-materials/:id/return */
+router.post("/:id/return", authenticate, requireAnyPermission("inventory:raw-materials"), async (req: Request, res: Response) => {
+  const c = await getCollections();
+  const id = req.params.id;
+  const { returnReason, returnedQuantity, returnStatus } = req.body;
+  if (typeof returnedQuantity !== "number" || returnedQuantity <= 0) return fail(res, "Invalid returned quantity");
+
+  const existing = await c.rawMaterials.findOne({ id });
+  if (!existing) return fail(res, "Raw material entry not found", 404);
+
+  if (existing.quantityAvailable < returnedQuantity) return fail(res, "Not enough available quantity to return");
+
+  const update = {
+    quantityAvailable: existing.quantityAvailable - returnedQuantity,
+    returnStatus: returnStatus || "Returned to Vendor",
+    returnedQuantity: returnedQuantity + (existing.returnedQuantity || 0),
+    returnReason: returnReason || existing.returnReason,
+    returnedAt: new Date(),
+    returnedBy: req.user?.id,
+    returnedByName: req.user?.name,
+    updatedAt: new Date(),
+  };
+
+  await c.rawMaterials.updateOne({ id }, { $set: update });
+  return ok(res, { ...existing, ...update });
+});
+
 export default router;

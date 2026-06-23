@@ -305,6 +305,12 @@ export type RawMaterial = {
   batch: string;
   notes?: string;
   inwardId?: string;
+  returnStatus?: "Not Returned" | "Returned to Vendor" | "Replaced in Production";
+  returnedQuantity?: number;
+  returnReason?: string;
+  returnedAt?: Date;
+  returnedBy?: string;
+  returnedByName?: string;
   createdAt: Date;
   updatedAt: Date;
 };
@@ -332,6 +338,10 @@ export type ManufacturedProduct = {
   customerPhones?: string[];
   soldDate?: Date;
   returnReason?: string;
+  returnedAt?: Date;
+  returnedBy?: string;
+  returnedByName?: string;
+  replacedWithSerial?: string;
   createdAt: Date;
   updatedAt: Date;
 };

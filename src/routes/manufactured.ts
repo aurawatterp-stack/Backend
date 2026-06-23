@@ -267,13 +267,21 @@ router.post("/:id/return", authenticate, requireAnyPermission("inventory:manufac
   const id = req.params.id;
   const existing = await c.manufactured.findOne({ id });
   if (!existing) return fail(res, "Record not found", 404);
-  const { returnReason } = req.body;
+  const { returnReason, replacedWithSerial } = req.body;
   const updatedAt = new Date();
-  await c.manufactured.updateOne(
-    { id },
-    { $set: { status: "Returned", returnReason: returnReason || "", updatedAt } }
-  );
-  return ok(res, { ...existing, status: "Returned", returnReason: returnReason || "", updatedAt });
+  
+  const update = {
+    status: "Returned" as const,
+    returnReason: returnReason || "",
+    returnedAt: new Date(),
+    returnedBy: req.user?.id,
+    returnedByName: req.user?.name,
+    replacedWithSerial: replacedWithSerial || "",
+    updatedAt
+  };
+
+  await c.manufactured.updateOne({ id }, { $set: update });
+  return ok(res, { ...existing, ...update });
 });
 
 export default router;
