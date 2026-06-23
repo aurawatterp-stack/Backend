@@ -174,6 +174,15 @@ function pickField(row: Record<string, string>, keys: string[]) {
     const value = String(row[normalizeKey(key)] ?? "").trim();
     if (value) return value;
   }
+  for (const rowKey of Object.keys(row)) {
+    for (const searchKey of keys) {
+      const normalizedSearchKey = normalizeKey(searchKey);
+      if (normalizedSearchKey && rowKey.includes(normalizedSearchKey)) {
+        const value = String(row[rowKey] ?? "").trim();
+        if (value) return value;
+      }
+    }
+  }
   return "";
 }
 
