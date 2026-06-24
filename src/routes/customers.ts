@@ -165,8 +165,24 @@ function parseWorksheetRows(xml: string, sharedStrings: string[]) {
 }
 
 function workbookRows(filePath: string) {
-  const sharedStrings = parseSharedStrings(readXmlFromXlsx(filePath, "xl/sharedStrings.xml"));
-  return parseWorksheetRows(readXmlFromXlsx(filePath, "xl/worksheets/sheet1.xml"), sharedStrings);
+  let sharedStringsXml = "";
+  let sheetXml = "";
+  try {
+    const zip = new AdmZip(filePath);
+    const entries = zip.getEntries();
+    const sharedStringsEntry = entries.find((e) => e.entryName.toLowerCase().includes("sharedstrings.xml"));
+    if (sharedStringsEntry) {
+      sharedStringsXml = sharedStringsEntry.getData().toString("utf8");
+    }
+    const sheetEntry = entries.find((e) => e.entryName.toLowerCase().startsWith("xl/worksheets/") && e.entryName.toLowerCase().endsWith(".xml"));
+    if (sheetEntry) {
+      sheetXml = sheetEntry.getData().toString("utf8");
+    }
+  } catch (err) {
+    console.warn(`Failed to read XLSX entries from ${filePath}`, err);
+  }
+  const sharedStrings = parseSharedStrings(sharedStringsXml);
+  return parseWorksheetRows(sheetXml, sharedStrings);
 }
 
 function pickField(row: Record<string, string>, keys: string[]) {

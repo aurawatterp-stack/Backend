@@ -1,4 +1,4 @@
-import { execFileSync } from "node:child_process";
+
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -99,12 +99,27 @@ function columnIndexFromRef(cellRef: string) {
   return Math.max(0, index - 1);
 }
 
-function readXmlFromXlsx(filePath: string, entryPath: string) {
+import AdmZip from "adm-zip";
+
+function workbookRows(filePath: string) {
+  let sharedStringsXml = "";
+  let sheetXml = "";
   try {
-    return execFileSync("unzip", ["-p", filePath, entryPath], { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
-  } catch {
-    return "";
+    const zip = new AdmZip(filePath);
+    const entries = zip.getEntries();
+    const sharedStringsEntry = entries.find((e) => e.entryName.toLowerCase().includes("sharedstrings.xml"));
+    if (sharedStringsEntry) {
+      sharedStringsXml = sharedStringsEntry.getData().toString("utf8");
+    }
+    const sheetEntry = entries.find((e) => e.entryName.toLowerCase().startsWith("xl/worksheets/") && e.entryName.toLowerCase().endsWith(".xml"));
+    if (sheetEntry) {
+      sheetXml = sheetEntry.getData().toString("utf8");
+    }
+  } catch (err) {
+    console.warn(`Failed to read XLSX entries from ${filePath}`, err);
   }
+  const sharedStrings = parseSharedStrings(sharedStringsXml);
+  return parseWorksheetRows(sheetXml, sharedStrings);
 }
 
 function parseSharedStrings(xml: string) {
@@ -193,8 +208,7 @@ export async function parseEngineerAssignmentWorkbook(filePath: string): Promise
   const tempPath = path.join(os.tmpdir(), `engineer-assignment-${Date.now()}-${Math.random().toString(16).slice(2)}.xlsx`);
   fs.copyFileSync(filePath, tempPath);
   try {
-    const sharedStrings = parseSharedStrings(readXmlFromXlsx(tempPath, "xl/sharedStrings.xml"));
-    const rows = parseWorksheetRows(readXmlFromXlsx(tempPath, "xl/worksheets/sheet1.xml"), sharedStrings);
+    const rows = workbookRows(tempPath);
     if (!rows.length) {
       throw new Error("Workbook is empty");
     }
