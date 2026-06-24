@@ -1,9 +1,9 @@
-import express, { type NextFunction, type Request, type Response, type Router } from "express";
+﻿import express, { type NextFunction, type Request, type Response, type Router } from "express";
 import multer from "multer";
 
 import { getCollections } from "../db/collections";
 import { authenticate, authorize, requireAnyPermission } from "../middleware/auth";
-import type { AuthUser, Notification, Sale } from "../types";
+import type { AuthUser, ManufacturedProduct, Notification, Sale } from "../types";
 import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -38,9 +38,10 @@ function parsePiItems(value: unknown): Sale["piItems"] {
 
 type SalesCollections = Awaited<ReturnType<typeof getCollections>>;
 const PI_WORKFLOW_VERSION = "payment-dispatch-v2";
-const PI_STATUS_SUBMITTED = "PI Submitted - Pending Payment Verification";
+const PI_STATUS_SUBMITTED = "Dispatch Request Pending";
+const REGISTERED_PRICE_CATEGORY = "Distributor Price";
 const PI_STATUS_PAYMENT_VERIFIED = "Payment Verified";
-const PI_STATUS_DISPATCH_READY = "Dispatch Ready";
+const PI_STATUS_DISPATCH_READY = "Vehicle No. Shared";
 const PI_STATUS_DISPATCHED = "Dispatched";
 
 function piYearFromDate(value: unknown) {
@@ -50,6 +51,66 @@ function piYearFromDate(value: unknown) {
 
 function isPlaceholderPiNumber(value: string) {
   return /^PI-\d{4}-X+$/i.test(value);
+}
+
+function normalizePriceCategoryForRegistration(isRegistered: boolean, priceCategory?: string) {
+  if (isRegistered) return REGISTERED_PRICE_CATEGORY;
+  if (priceCategory === "Dealer Price" || priceCategory === "Distributor Price" || priceCategory === "MSP" || priceCategory === "Manual") {
+    return priceCategory;
+  }
+  return REGISTERED_PRICE_CATEGORY;
+}
+
+function escapeRegExp(value: string) {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+function normalizeSerialNumber(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+async function resolveManufacturedProductForSerial(
+  c: SalesCollections,
+  sale: Pick<Sale, "serialNumber" | "materialName" | "referenceNo" | "saleDate" | "customerId" | "paymentStatus">,
+  serialNumber: unknown
+) {
+  const serial = normalizeSerialNumber(serialNumber);
+  if (!serial) return null;
+
+  const directMatch = await c.manufactured.findOne({ serialNumber: serial });
+  if (directMatch) return directMatch;
+
+  const caseInsensitiveMatch = await c.manufactured.findOne({
+    serialNumber: { $regex: `^${escapeRegExp(serial)}$`, $options: "i" },
+  });
+  if (caseInsensitiveMatch) return caseInsensitiveMatch;
+
+  const serialEntry = await c.serials.findOne({
+    serialNumber: { $regex: `^${escapeRegExp(serial)}$`, $options: "i" },
+  });
+  if (!serialEntry) return null;
+
+  const product = serialEntry.productSeriesId
+    ? await c.products.findOne({ series: serialEntry.productSeriesId })
+    : sale.materialName
+      ? await c.products.findOne({ model: sale.materialName })
+      : null;
+
+  const fallbackManufactured: ManufacturedProduct = {
+    id: generateId(),
+    serialNumber: serial,
+    productId: product?.id ?? "",
+    mfgDate: sale.saleDate ? new Date(sale.saleDate) : new Date(),
+    status: "Sold",
+    invoiceNo: sale.referenceNo,
+    paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
+    customerId: sale.customerId,
+    createdAt: new Date(),
+    updatedAt: new Date(),
+  };
+
+  await c.manufactured.insertOne(fallbackManufactured);
+  return fallbackManufactured;
 }
 
 async function nextPiNumber(c: SalesCollections, year = new Date().getFullYear()) {
@@ -183,6 +244,7 @@ router.put("/:id/force-pi", authenticate, authorize("Admin"), async (req: Reques
   if (sale.forcePiApprovalStatus !== "Pending") return fail(res, "Only pending PI can be edited before approval");
 
   const update: Partial<Sale> = {};
+  const effectiveRegisteredCustomer = typeof dealerRegistered === "boolean" ? dealerRegistered : sale.dealerRegistered !== false;
   if (documentType !== undefined) update.documentType = String(documentType);
   if (saleDate) update.saleDate = new Date(saleDate);
   if (referenceNo !== undefined) {
@@ -213,7 +275,12 @@ router.put("/:id/force-pi", authenticate, authorize("Admin"), async (req: Reques
   }
   if (stateRegion !== undefined) update.stateRegion = String(stateRegion);
   if (typeof dealerRegistered === "boolean") update.dealerRegistered = dealerRegistered;
-  if (priceCategory !== undefined) update.priceCategory = priceCategory;
+  if (priceCategory !== undefined) {
+    if (effectiveRegisteredCustomer && priceCategory !== REGISTERED_PRICE_CATEGORY) {
+      return fail(res, "Registered PI supports only Distributor Price");
+    }
+    update.priceCategory = normalizePriceCategoryForRegistration(effectiveRegisteredCustomer, String(priceCategory));
+  }
   if (availableQuantity !== undefined && availableQuantity !== null) update.availableQuantity = Number(availableQuantity);
   if (inventoryStatus !== undefined) update.inventoryStatus = inventoryStatus;
   if (expectedDispatchDate) update.expectedDispatchDate = new Date(expectedDispatchDate);
@@ -264,6 +331,7 @@ router.post("/:id/approve-force-pi", authenticate, authorize("Admin"), async (re
     forcePiApprovedBy: user.userId,
     forcePiApprovedAt: new Date(),
   };
+  const effectiveRegisteredCustomer = typeof dealerRegistered === "boolean" ? dealerRegistered : sale.dealerRegistered !== false;
 
   if (documentType !== undefined) update.documentType = String(documentType);
   if (saleDate) update.saleDate = new Date(saleDate);
@@ -295,7 +363,12 @@ router.post("/:id/approve-force-pi", authenticate, authorize("Admin"), async (re
     update.quantity = parsedPiItems.reduce((sum, item) => sum + item.quantity, 0);
   }
   if (stateRegion !== undefined) update.stateRegion = String(stateRegion);
-  if (priceCategory !== undefined) update.priceCategory = priceCategory;
+  if (priceCategory !== undefined) {
+    if (effectiveRegisteredCustomer && priceCategory !== REGISTERED_PRICE_CATEGORY) {
+      return fail(res, "Registered PI supports only Distributor Price");
+    }
+    update.priceCategory = normalizePriceCategoryForRegistration(effectiveRegisteredCustomer, String(priceCategory));
+  }
   if (availableQuantity !== undefined && availableQuantity !== null) update.availableQuantity = Number(availableQuantity);
   if (inventoryStatus !== undefined) update.inventoryStatus = inventoryStatus;
   if (expectedDispatchDate) update.expectedDispatchDate = new Date(expectedDispatchDate);
@@ -307,7 +380,7 @@ router.post("/:id/approve-force-pi", authenticate, authorize("Admin"), async (re
   return ok(res, approved);
 });
 
-/** POST /api/sales/upload-docket — upload courier docket file to Cloudinary */
+/** POST /api/sales/upload-docket â€” upload courier docket file to Cloudinary */
 router.post(
   "/upload-docket",
   authenticate,
@@ -340,7 +413,7 @@ router.post(
   }
 );
 
-/** POST /api/sales/upload-pi — upload PI file to Cloudinary */
+/** POST /api/sales/upload-pi â€” upload PI file to Cloudinary */
 router.post(
   "/upload-pi",
   authenticate,
@@ -403,14 +476,17 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
         return fail(res, "Accounts cannot upload Tax Invoice or E-Way Bill before payment verification");
       }
       if (sale.piWorkflowStatus !== PI_STATUS_DISPATCH_READY) {
-        return fail(res, "Accounts can upload Tax Invoice and E-Way Bill only after Dispatch Ready status");
+        return fail(res, "Accounts can upload Tax Invoice and E-Way Bill only after vehicle no. is shared");
       }
     } else if (wantsPaymentVerification) {
+      if (!sale.accountsRequestAt) {
+        return fail(res, "Dispatch Team must forward the PI to Accounts before payment verification");
+      }
       if (sale.piWorkflowStatus !== PI_STATUS_SUBMITTED) {
         return fail(res, "Payment verification can only be completed from the Accounts payment queue");
       }
     } else {
-      return fail(res, "Use Mark as Payment Verified, or upload Tax Invoice and E-Way Bill after Dispatch Ready");
+      return fail(res, "Use Mark as Payment Verified, or upload Tax Invoice and E-Way Bill after vehicle no. is shared");
     }
   }
 
@@ -522,8 +598,10 @@ router.put("/:id/sales-dispatch", authenticate, requireAnyPermission("sales:entr
     return fail(res, "PI attachment or dispatch date is required");
   }
 
-  update.accountsRequestAt = new Date();
-  update.accountsRequestBy = user.userId;
+  if (!isNewPiWorkflow(sale)) {
+    update.accountsRequestAt = new Date();
+    update.accountsRequestBy = user.userId;
+  }
 
   await c.sales.updateOne({ id }, { $set: update });
   const updated = await c.sales.findOne({ id });
@@ -540,6 +618,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     courierDocketNo,
     courierDocketAttachmentName,
     courierDocketAttachmentUrl,
+    forwardToAccounts,
   } = req.body;
 
   const sale = await c.sales.findOne({ id });
@@ -548,11 +627,18 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered" || dispatchStatus === "Dispatched";
 
   if (isNewPiWorkflow(sale)) {
-    if (sale.paymentStatus !== "Confirmed") {
+    if (forwardToAccounts) {
+      if (sale.piWorkflowStatus !== PI_STATUS_SUBMITTED) {
+        return fail(res, "Only a new dispatch request can be forwarded to Accounts");
+      }
+    } else if (sale.paymentStatus !== "Confirmed") {
       return fail(res, "Payment must be verified by Accounts before Dispatch Team can prepare this PI");
     }
     if (dispatchStatus === "Ready" && sale.piWorkflowStatus !== PI_STATUS_PAYMENT_VERIFIED) {
-      return fail(res, "Dispatch Ready can only be marked after Accounts verifies payment");
+      return fail(res, "Vehicle no. can only be shared after Accounts verifies payment");
+    }
+    if (dispatchStatus === "Ready" && !serialNumber && !sale.serialNumber) {
+      return fail(res, "Vehicle no. is required before sharing the request with Accounts");
     }
     if (isDeliveryStatus && sale.piWorkflowStatus !== PI_STATUS_DISPATCH_READY) {
       return fail(res, "Final dispatch can happen only after Accounts uploads Tax Invoice and E-Way Bill");
@@ -564,35 +650,44 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
       return fail(res, "Tax Invoice and E-Way Bill are required before final dispatch");
     }
     if (dispatchStatus !== undefined && dispatchStatus !== "Ready" && !isDeliveryStatus) {
-      return fail(res, "New PI workflow supports only Dispatch Ready or final dispatch actions from Dispatch Team");
+      return fail(res, "New PI workflow supports only vehicle no. sharing or final dispatch actions from Dispatch Team");
     }
   }
 
   const update: Partial<Sale> = {};
+  const normalizedSerialNumber = normalizeSerialNumber(serialNumber);
   if (serialNumber) {
-    const mfg = await c.manufactured.findOne({ serialNumber: String(serialNumber) });
-    if (!mfg) return fail(res, "Serial number not found in manufactured products");
-    if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo) return fail(res, "This product is already sold");
-    update.serialNumber = String(serialNumber);
+    update.serialNumber = normalizedSerialNumber;
 
     if (isDeliveryStatus) {
-      await c.manufactured.updateOne(
-        { id: mfg.id },
-        {
-          $set: {
-            status: "Sold",
-            invoiceNo: sale.referenceNo,
-            customerId: sale.customerId,
-            soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
-            paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
-            updatedAt: new Date(),
-          },
-        }
-      );
-      await updateSerialStatus(c, {
-        serialNumber: String(serialNumber),
-        status: "Dispatched",
-      });
+      const mfg = await resolveManufacturedProductForSerial(c, sale, normalizedSerialNumber);
+      if (mfg) {
+        if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo) return fail(res, "This product is already sold");
+
+        await c.manufactured.updateOne(
+          { id: mfg.id },
+          {
+            $set: {
+              status: "Sold",
+              invoiceNo: sale.referenceNo,
+              customerId: sale.customerId,
+              soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
+              paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
+              updatedAt: new Date(),
+            },
+          }
+        );
+        await updateSerialStatus(c, {
+          serialNumber: normalizedSerialNumber,
+          status: "Dispatched",
+        });
+      } else {
+        console.warn("Dispatch finalization skipped manufactured lookup for unmapped serial", {
+          saleId: sale.id,
+          referenceNo: sale.referenceNo,
+          serialNumber: normalizedSerialNumber,
+        });
+      }
     }
   }
   if (confirmedDispatchDate) update.confirmedDispatchDate = new Date(confirmedDispatchDate);
@@ -624,18 +719,33 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   }
 
   let event: ReturnType<typeof workflowEvent> | undefined;
-  if (isNewPiWorkflow(sale) && dispatchStatus === "Ready") {
-    update.dispatchStatus = "Ready";
-    update.piWorkflowStatus = PI_STATUS_DISPATCH_READY;
-    update.dispatchReadyAt = new Date();
-    update.dispatchReadyBy = user.userId;
+  if (isNewPiWorkflow(sale) && forwardToAccounts) {
+    update.accountsRequestAt = new Date();
+    update.accountsRequestBy = user.userId;
     event = workflowEvent(
       sale,
       user,
-      "Mark Dispatch Ready",
+      "Forward to Accounts",
+      PI_STATUS_SUBMITTED,
+      "Dispatch",
+      "Dispatch Team forwarded the request to Accounts for payment verification"
+    );
+  }
+  if (isNewPiWorkflow(sale) && dispatchStatus === "Ready") {
+    const now = new Date();
+    update.dispatchStatus = "Ready";
+    update.piWorkflowStatus = PI_STATUS_DISPATCH_READY;
+    update.dispatchReadyAt = now;
+    update.dispatchReadyBy = user.userId;
+    update.accountsRequestAt = now;
+    update.accountsRequestBy = user.userId;
+    event = workflowEvent(
+      sale,
+      user,
+      "Share Vehicle No.",
       PI_STATUS_DISPATCH_READY,
       "Dispatch",
-      "Material prepared and request returned to Accounts Team for documents"
+      "Vehicle no. shared and request returned to Accounts Team for documents"
     );
   }
   if (isNewPiWorkflow(sale) && isDeliveryStatus) {
@@ -739,7 +849,8 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
     dealerRegistered === false;
 
   if (serialNumber) {
-    const mfg = await c.manufactured.findOne({ serialNumber });
+    const normalizedSerialNumber = normalizeSerialNumber(serialNumber);
+    const mfg = await resolveManufacturedProductForSerial(c, { serialNumber, materialName, referenceNo: finalReferenceNo, saleDate, customerId, paymentStatus }, normalizedSerialNumber);
     if (!mfg) return fail(res, "Serial number not found in manufactured products");
     if (mfg.status === "Sold") return fail(res, "This product is already sold");
 
@@ -758,7 +869,7 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
       }
     );
     await updateSerialStatus(c, {
-      serialNumber: String(serialNumber),
+      serialNumber: normalizedSerialNumber,
       status: "Sold",
     });
   }
@@ -777,8 +888,6 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
     sale.dispatchStatus = "Planned";
     sale.piWorkflowVersion = PI_WORKFLOW_VERSION;
     sale.piWorkflowStatus = PI_STATUS_SUBMITTED;
-    sale.accountsRequestAt = sale.createdAt;
-    sale.accountsRequestBy = user.userId;
     sale.piWorkflowHistory = [
       {
         id: generateId(),
@@ -789,7 +898,7 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
         byName: user.name,
         byRole: user.role,
         at: sale.createdAt,
-        note: "PI request submitted to Accounts Team for payment verification",
+        note: "PI request submitted to Dispatch Team for review and forwarding",
       },
     ];
   }
@@ -822,7 +931,12 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
   } else if (typeof forcePiPermission === "boolean") {
     sale.forcePiPermission = false;
   }
-  if (priceCategory) sale.priceCategory = priceCategory;
+  if (priceCategory !== undefined) {
+    if (isRegisteredCustomer && priceCategory !== REGISTERED_PRICE_CATEGORY) {
+      return fail(res, "Registered PI supports only Distributor Price");
+    }
+    sale.priceCategory = normalizePriceCategoryForRegistration(isRegisteredCustomer, String(priceCategory));
+  }
   if (availableQuantity !== undefined && availableQuantity !== null) sale.availableQuantity = Number(availableQuantity);
   if (inventoryStatus) sale.inventoryStatus = inventoryStatus;
   if (!requestedForcePi && forcePiApprovalStatus) sale.forcePiApprovalStatus = forcePiApprovalStatus;
@@ -843,7 +957,7 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
       id: generateId(),
       type: "sale_recorded",
       title: isWorkflowEntry ? "New Sales Workflow PI" : isDispatchEntry ? "Dispatch Planning Updated" : "New Sale Recorded",
-      body: `${finalReferenceNo} • ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
+      body: `${finalReferenceNo} â€¢ ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
       entityType: "sale",
       entityId: sale.id,
       meta: {
@@ -878,3 +992,5 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
 });
 
 export default router;
+
+

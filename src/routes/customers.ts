@@ -1,4 +1,4 @@
-import express, { type NextFunction, type Request, type Response, type Router } from "express";
+﻿import express, { type NextFunction, type Request, type Response, type Router } from "express";
 import multer from "multer";
 import fs from "node:fs";
 import os from "node:os";
@@ -270,7 +270,7 @@ function buildPendingCustomerFromRow(row: Record<string, string>, userId: string
   } as PendingCustomerRegistration);
 }
 
-/** GET /api/customers — paginated, filterable by name/type */
+/** GET /api/customers â€” paginated, filterable by name/type */
 router.get("/", authenticate, requireAnyPermission("customers:manage", "sales:entry", "dispatch:manage", "accounts:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", type, page = "1", limit = "20" } = req.query as Record<string, string>;
@@ -286,7 +286,7 @@ router.get("/", authenticate, requireAnyPermission("customers:manage", "sales:en
   return ok(res, { data, total, page: p, limit: l });
 });
 
-/** GET /api/customers/pending-registrations — Admin queue, or Sales user's own submitted requests */
+/** GET /api/customers/pending-registrations â€” Admin queue, or Sales user's own submitted requests */
 router.get("/pending-registrations", authenticate, requireAnyPermission("customers:manage", "sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const user = (req as any).user as AuthUser;
@@ -296,7 +296,7 @@ router.get("/pending-registrations", authenticate, requireAnyPermission("custome
   return ok(res, pending);
 });
 
-/** POST /api/customers/upload-document — upload distributor KYC document to Cloudinary */
+/** POST /api/customers/upload-document â€” upload distributor KYC document to Cloudinary */
 router.post(
   "/upload-document",
   authenticate,
@@ -330,7 +330,7 @@ router.post(
   }
 );
 
-/** POST /api/customers/request-registration — Sales submits distributor/customer for admin approval */
+/** POST /api/customers/request-registration â€” Sales submits distributor/customer for admin approval */
 router.post("/request-registration", authenticate, requireAnyPermission("sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const user = (req as any).user as AuthUser;
@@ -418,7 +418,7 @@ router.post("/request-registration", authenticate, requireAnyPermission("sales:e
       id: generateId(),
       type: "customer_registration_requested",
       title: "Distributor Approval Request",
-      body: `${pending.name} • ${pending.phone}`,
+      body: `${pending.name} â€¢ ${pending.phone}`,
       entityType: "customer_registration",
       entityId: pending.id,
       meta: {
@@ -444,7 +444,7 @@ router.post("/request-registration", authenticate, requireAnyPermission("sales:e
   return ok(res, { message: "Distributor registration request sent to Admin for approval.", request: pending }, 201);
 });
 
-/** PUT /api/customers/pending-registrations/:id — Admin edits a pending customer/distributor */
+/** PUT /api/customers/pending-registrations/:id â€” Admin edits a pending customer/distributor */
 router.put("/pending-registrations/:id", authenticate, requireAnyPermission("customers:manage", "sales:entry"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const pending = await c.pendingCustomerRegistrations.findOne({ id: req.params.id });
@@ -526,7 +526,7 @@ router.put("/pending-registrations/:id", authenticate, requireAnyPermission("cus
   return ok(res, updated);
 });
 
-/** POST /api/customers/import-distributors — Bulk import workbook */
+/** POST /api/customers/import-distributors â€” Bulk import workbook */
 router.post(
   "/import-distributors",
   authenticate,
@@ -608,7 +608,7 @@ router.post(
             id: generateId(),
             type: "customer_registration_requested",
             title: "Distributor Approval Request",
-            body: `${pending.name} â€¢ ${pending.phone}`,
+            body: `${pending.name} Ã¢â‚¬Â¢ ${pending.phone}`,
             entityType: "customer_registration",
             entityId: pending.id,
             meta: {
@@ -655,7 +655,7 @@ router.post(
   }
 );
 
-/** POST /api/customers/approve/:id — Admin approves pending customer/distributor */
+/** POST /api/customers/approve/:id â€” Admin approves pending customer/distributor */
 router.post("/approve/:id", authenticate, requireAnyPermission("customers:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const user = (req as any).user as AuthUser;
@@ -747,6 +747,7 @@ router.post("/", authenticate, requireAnyPermission("customers:manage", "sales:e
     deliveryAddress3,
     areaAllotted,
     distributorshipType,
+    documentsUploaded,
     relevantSalesPerson,
   } = req.body;
   const nextName = String(name ?? "").trim();
@@ -778,6 +779,7 @@ router.post("/", authenticate, requireAnyPermission("customers:manage", "sales:e
     deliveryAddress3: deliveryAddress3 ? String(deliveryAddress3).trim() : undefined,
     areaAllotted: areaAllotted ? String(areaAllotted).trim() : undefined,
     distributorshipType: distributorshipType ? String(distributorshipType).trim() : undefined,
+    documentsUploaded: normalizeCustomerDocuments(documentsUploaded),
     relevantSalesPerson: relevantSalesPerson ? String(relevantSalesPerson).trim() : undefined,
     status: "Active",
     createdAt: new Date(),
@@ -813,6 +815,7 @@ router.put("/:id", authenticate, requireAnyPermission("customers:manage"), async
     deliveryAddress3: req.body.deliveryAddress3 !== undefined ? String(req.body.deliveryAddress3).trim() : undefined,
     areaAllotted: req.body.areaAllotted !== undefined ? String(req.body.areaAllotted).trim() : undefined,
     distributorshipType: req.body.distributorshipType !== undefined ? String(req.body.distributorshipType).trim() : undefined,
+    documentsUploaded: req.body.documentsUploaded !== undefined ? normalizeCustomerDocuments(req.body.documentsUploaded) : undefined,
     relevantSalesPerson: req.body.relevantSalesPerson !== undefined ? String(req.body.relevantSalesPerson).trim() : undefined,
     status: req.body.status !== undefined ? (String(req.body.status).trim() === "Inactive" ? "Inactive" : "Active") : undefined,
     updatedAt: new Date(),
@@ -831,3 +834,6 @@ router.delete("/:id", authenticate, requireAnyPermission("customers:manage"), as
 });
 
 export default router;
+
+
+

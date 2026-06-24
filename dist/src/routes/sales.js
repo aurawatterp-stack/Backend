@@ -1,4 +1,4 @@
-"use strict";
+﻿"use strict";
 var __importDefault = (this && this.__importDefault) || function (mod) {
     return (mod && mod.__esModule) ? mod : { "default": mod };
 };
@@ -280,7 +280,7 @@ router.post("/:id/approve-force-pi", auth_1.authenticate, (0, auth_1.authorize)(
     const approved = await c.sales.findOne({ id });
     return (0, http_1.ok)(res, approved);
 });
-/** POST /api/sales/upload-docket — upload courier docket file to Cloudinary */
+/** POST /api/sales/upload-docket â€” upload courier docket file to Cloudinary */
 router.post("/upload-docket", auth_1.authenticate, (0, auth_1.requireAnyPermission)("dispatch:manage"), runDispatchDocketUpload, async (req, res) => {
     const file = req.file;
     if (!file)
@@ -304,7 +304,7 @@ router.post("/upload-docket", auth_1.authenticate, (0, auth_1.requireAnyPermissi
         return (0, http_1.fail)(res, err instanceof Error ? err.message : "Failed to upload courier docket", 502);
     }
 });
-/** POST /api/sales/upload-pi — upload PI file to Cloudinary */
+/** POST /api/sales/upload-pi â€” upload PI file to Cloudinary */
 router.post("/upload-pi", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry", "accounts:manage"), runPiUpload, async (req, res) => {
     const file = req.file;
     if (!file)
@@ -483,27 +483,35 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
     }
     const update = {};
     if (serialNumber) {
-        const mfg = await c.manufactured.findOne({ serialNumber: String(serialNumber) });
-        if (!mfg)
-            return (0, http_1.fail)(res, "Serial number not found in manufactured products");
-        if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo)
-            return (0, http_1.fail)(res, "This product is already sold");
-        update.serialNumber = String(serialNumber);
+        const normalizedSerialNumber = String(serialNumber ?? "").trim();
+        const mfg = await c.manufactured.findOne({ serialNumber: normalizedSerialNumber });
+        update.serialNumber = normalizedSerialNumber;
         if (isDeliveryStatus) {
-            await c.manufactured.updateOne({ id: mfg.id }, {
-                $set: {
-                    status: "Sold",
-                    invoiceNo: sale.referenceNo,
-                    customerId: sale.customerId,
-                    soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
-                    paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
-                    updatedAt: new Date(),
-                },
-            });
-            await (0, serialLifecycle_1.updateSerialStatus)(c, {
-                serialNumber: String(serialNumber),
-                status: "Dispatched",
-            });
+            if (mfg) {
+                if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo)
+                    return (0, http_1.fail)(res, "This product is already sold");
+                await c.manufactured.updateOne({ id: mfg.id }, {
+                    $set: {
+                        status: "Sold",
+                        invoiceNo: sale.referenceNo,
+                        customerId: sale.customerId,
+                        soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
+                        paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
+                        updatedAt: new Date(),
+                    },
+                });
+                await (0, serialLifecycle_1.updateSerialStatus)(c, {
+                    serialNumber: normalizedSerialNumber,
+                    status: "Dispatched",
+                });
+            }
+            else {
+                console.warn("Dispatch finalization skipped manufactured lookup for unmapped serial", {
+                    saleId: sale.id,
+                    referenceNo: sale.referenceNo,
+                    serialNumber: normalizedSerialNumber,
+                });
+            }
         }
     }
     if (confirmedDispatchDate)
@@ -732,7 +740,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
             id: (0, id_1.generateId)(),
             type: "sale_recorded",
             title: isWorkflowEntry ? "New Sales Workflow PI" : isDispatchEntry ? "Dispatch Planning Updated" : "New Sale Recorded",
-            body: `${finalReferenceNo} • ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
+            body: `${finalReferenceNo} â€¢ ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
             entityType: "sale",
             entityId: sale.id,
             meta: {
@@ -766,3 +774,4 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
     return (0, http_1.ok)(res, sale, 201);
 });
 exports.default = router;
+
