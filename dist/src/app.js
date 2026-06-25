@@ -29,15 +29,22 @@ const geo_1 = __importDefault(require("./routes/geo"));
 const app = (0, express_1.default)();
 function createCorsOptions() {
     const allowedOrigins = [
+        "https://aurawatt.in",
+        "https://www.aurawatt.in",
         "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
         "http://localhost:3000",
         "http://127.0.0.1:3000",
+        ...(process.env.CORS_ORIGIN ?? "")
+            .split(",")
+            .map((origin) => origin.trim().replace(/\/+$/, ""))
+            .filter(Boolean),
     ];
+    const allowedOriginSet = new Set(allowedOrigins);
     return {
         origin: (requestOrigin, callback) => {
             if (!requestOrigin)
                 return callback(null, true);
-            return callback(null, allowedOrigins.includes(requestOrigin));
+            return callback(null, allowedOriginSet.has(requestOrigin.replace(/\/+$/, "")));
         },
         credentials: true,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],

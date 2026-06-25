@@ -8,9 +8,15 @@ let cachedApp;
 let bootError;
 
 const ALLOWED_ORIGINS = new Set([
+  "https://aurawatt.in",
+  "https://www.aurawatt.in",
   "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
+  ...(process.env.CORS_ORIGIN || "")
+    .split(",")
+    .map((origin) => normalizeOrigin(origin))
+    .filter(Boolean),
 ]);
 
 function normalizeOrigin(origin) {
