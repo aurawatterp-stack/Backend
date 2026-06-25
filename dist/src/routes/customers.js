@@ -8,7 +8,7 @@ const multer_1 = __importDefault(require("multer"));
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
-const node_child_process_1 = require("node:child_process");
+const adm_zip_1 = __importDefault(require("adm-zip"));
 const collections_1 = require("../db/collections");
 const auth_1 = require("../middleware/auth");
 const cloudinary_1 = require("../utils/cloudinary");
@@ -84,9 +84,14 @@ function columnIndexFromRef(cellRef) {
 }
 function readXmlFromXlsx(filePath, entryPath) {
     try {
-        return (0, node_child_process_1.execFileSync)("unzip", ["-p", filePath, entryPath], { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
+        const zip = new adm_zip_1.default(filePath);
+        const entry = zip.getEntry(entryPath);
+        if (!entry)
+            return "";
+        return entry.getData().toString("utf8");
     }
-    catch {
+    catch (err) {
+        console.warn(`Failed to read ${entryPath} from ${filePath}`, err);
         return "";
     }
 }
@@ -160,14 +165,41 @@ function parseWorksheetRows(xml, sharedStrings) {
     return rows;
 }
 function workbookRows(filePath) {
-    const sharedStrings = parseSharedStrings(readXmlFromXlsx(filePath, "xl/sharedStrings.xml"));
-    return parseWorksheetRows(readXmlFromXlsx(filePath, "xl/worksheets/sheet1.xml"), sharedStrings);
+    let sharedStringsXml = "";
+    let sheetXml = "";
+    try {
+        const zip = new adm_zip_1.default(filePath);
+        const entries = zip.getEntries();
+        const sharedStringsEntry = entries.find((e) => e.entryName.toLowerCase().includes("sharedstrings.xml"));
+        if (sharedStringsEntry) {
+            sharedStringsXml = sharedStringsEntry.getData().toString("utf8");
+        }
+        const sheetEntry = entries.find((e) => e.entryName.toLowerCase().startsWith("xl/worksheets/") && e.entryName.toLowerCase().endsWith(".xml"));
+        if (sheetEntry) {
+            sheetXml = sheetEntry.getData().toString("utf8");
+        }
+    }
+    catch (err) {
+        console.warn(`Failed to read XLSX entries from ${filePath}`, err);
+    }
+    const sharedStrings = parseSharedStrings(sharedStringsXml);
+    return parseWorksheetRows(sheetXml, sharedStrings);
 }
 function pickField(row, keys) {
     for (const key of keys) {
         const value = String(row[normalizeKey(key)] ?? "").trim();
         if (value)
             return value;
+    }
+    for (const rowKey of Object.keys(row)) {
+        for (const searchKey of keys) {
+            const normalizedSearchKey = normalizeKey(searchKey);
+            if (normalizedSearchKey && rowKey.includes(normalizedSearchKey)) {
+                const value = String(row[rowKey] ?? "").trim();
+                if (value)
+                    return value;
+            }
+        }
     }
     return "";
 }
@@ -193,7 +225,7 @@ function normalizeCustomerType(value) {
     return String(value ?? "").trim() === "Individual" ? "Individual" : "Distributor";
 }
 function buildCustomerFromRow(row) {
-    const name = pickField(row, ["name", "distributor name", "firm name", "company name"]);
+    const name = pickField(row, ["name", "distributor name", "firm name", "company name", "name distributor firm name"]);
     const email = pickField(row, ["email", "email id"]);
     const phone = pickField(row, ["phone", "mobile", "contact number", "contact no", "contact number"]);
     const address = pickField(row, ["address", "registered office address", "registered office address bill to", "bill to", "billing address"]);
@@ -239,7 +271,7 @@ function buildPendingCustomerFromRow(row, userId) {
         submittedAt: new Date(),
     });
 }
-/** GET /api/customers — paginated, filterable by name/type */
+/** GET /api/customers â€” paginated, filterable by name/type */
 router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry", "dispatch:manage", "accounts:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", type, page = "1", limit = "20" } = req.query;
@@ -254,7 +286,7 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers
     const data = await c.customers.find(filter).skip((p - 1) * l).limit(l).toArray();
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
-/** GET /api/customers/pending-registrations — Admin queue, or Sales user's own submitted requests */
+/** GET /api/customers/pending-registrations â€” Admin queue, or Sales user's own submitted requests */
 router.get("/pending-registrations", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const user = req.user;
@@ -263,7 +295,7 @@ router.get("/pending-registrations", auth_1.authenticate, (0, auth_1.requireAnyP
     const pending = await c.pendingCustomerRegistrations.find(filter).sort({ submittedAt: -1 }).toArray();
     return (0, http_1.ok)(res, pending);
 });
-/** POST /api/customers/upload-document — upload distributor KYC document to Cloudinary */
+/** POST /api/customers/upload-document â€” upload distributor KYC document to Cloudinary */
 router.post("/upload-document", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), runCustomerDocumentUpload, async (req, res) => {
     const file = req.file;
     if (!file)
@@ -291,7 +323,7 @@ router.post("/upload-document", auth_1.authenticate, (0, auth_1.requireAnyPermis
         return (0, http_1.fail)(res, err instanceof Error ? err.message : "Failed to upload document", 502);
     }
 });
-/** POST /api/customers/request-registration — Sales submits distributor/customer for admin approval */
+/** POST /api/customers/request-registration â€” Sales submits distributor/customer for admin approval */
 router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const user = req.user;
@@ -354,7 +386,7 @@ router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyP
             id: (0, id_1.generateId)(),
             type: "customer_registration_requested",
             title: "Distributor Approval Request",
-            body: `${pending.name} • ${pending.phone}`,
+            body: `${pending.name} â€¢ ${pending.phone}`,
             entityType: "customer_registration",
             entityId: pending.id,
             meta: {
@@ -380,7 +412,7 @@ router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyP
     }
     return (0, http_1.ok)(res, { message: "Distributor registration request sent to Admin for approval.", request: pending }, 201);
 });
-/** PUT /api/customers/pending-registrations/:id — Admin edits a pending customer/distributor */
+/** PUT /api/customers/pending-registrations/:id â€” Admin edits a pending customer/distributor */
 router.put("/pending-registrations/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const pending = await c.pendingCustomerRegistrations.findOne({ id: req.params.id });
@@ -440,7 +472,7 @@ router.put("/pending-registrations/:id", auth_1.authenticate, (0, auth_1.require
     await c.pendingCustomerRegistrations.updateOne({ id: pending.id }, { $set: { ...updated, updatedAt: new Date() } });
     return (0, http_1.ok)(res, updated);
 });
-/** POST /api/customers/import-distributors — Bulk import workbook */
+/** POST /api/customers/import-distributors â€” Bulk import workbook */
 router.post("/import-distributors", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), customerBulkUpload.single("file"), async (req, res) => {
     const file = req.file;
     if (!file)
@@ -514,7 +546,7 @@ router.post("/import-distributors", auth_1.authenticate, (0, auth_1.requireAnyPe
                     id: (0, id_1.generateId)(),
                     type: "customer_registration_requested",
                     title: "Distributor Approval Request",
-                    body: `${pending.name} â€¢ ${pending.phone}`,
+                    body: `${pending.name} Ã¢â‚¬Â¢ ${pending.phone}`,
                     entityType: "customer_registration",
                     entityId: pending.id,
                     meta: {
@@ -558,7 +590,7 @@ router.post("/import-distributors", auth_1.authenticate, (0, auth_1.requireAnyPe
         }
     }
 });
-/** POST /api/customers/approve/:id — Admin approves pending customer/distributor */
+/** POST /api/customers/approve/:id â€” Admin approves pending customer/distributor */
 router.post("/approve/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const user = req.user;
@@ -629,7 +661,7 @@ router.get("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("custom
 /** POST /api/customers */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { name, type, email, phone, address, stateRegion, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, relevantSalesPerson, } = req.body;
+    const { name, type, email, phone, address, stateRegion, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
     const nextName = String(name ?? "").trim();
     const nextType = String(type ?? "Distributor").trim();
     const nextEmail = String(email ?? "").trim().toLowerCase();
@@ -659,6 +691,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customer
         deliveryAddress3: deliveryAddress3 ? String(deliveryAddress3).trim() : undefined,
         areaAllotted: areaAllotted ? String(areaAllotted).trim() : undefined,
         distributorshipType: distributorshipType ? String(distributorshipType).trim() : undefined,
+        documentsUploaded: normalizeCustomerDocuments(documentsUploaded),
         relevantSalesPerson: relevantSalesPerson ? String(relevantSalesPerson).trim() : undefined,
         status: "Active",
         createdAt: new Date(),
@@ -694,6 +727,7 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("custom
         deliveryAddress3: req.body.deliveryAddress3 !== undefined ? String(req.body.deliveryAddress3).trim() : undefined,
         areaAllotted: req.body.areaAllotted !== undefined ? String(req.body.areaAllotted).trim() : undefined,
         distributorshipType: req.body.distributorshipType !== undefined ? String(req.body.distributorshipType).trim() : undefined,
+        documentsUploaded: req.body.documentsUploaded !== undefined ? normalizeCustomerDocuments(req.body.documentsUploaded) : undefined,
         relevantSalesPerson: req.body.relevantSalesPerson !== undefined ? String(req.body.relevantSalesPerson).trim() : undefined,
         status: req.body.status !== undefined ? (String(req.body.status).trim() === "Inactive" ? "Inactive" : "Active") : undefined,
         updatedAt: new Date(),

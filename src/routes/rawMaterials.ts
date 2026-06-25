@@ -137,7 +137,7 @@ router.delete("/:id", authenticate, requireAnyPermission("inventory:raw-material
 router.post("/:id/return", authenticate, requireAnyPermission("inventory:raw-materials"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const id = req.params.id;
-  const { returnReason, returnedQuantity, returnStatus } = req.body;
+  const { returnReason, returnedQuantity, returnStatus, returnedAt } = req.body;
   if (typeof returnedQuantity !== "number" || returnedQuantity <= 0) return fail(res, "Invalid returned quantity");
 
   const existing = await c.rawMaterials.findOne({ id });
@@ -150,9 +150,9 @@ router.post("/:id/return", authenticate, requireAnyPermission("inventory:raw-mat
     returnStatus: returnStatus || "Returned to Vendor",
     returnedQuantity: returnedQuantity + (existing.returnedQuantity || 0),
     returnReason: returnReason || existing.returnReason,
-    returnedAt: new Date(),
-    returnedBy: req.user?.id,
-    returnedByName: req.user?.name,
+    returnedAt: returnedAt ? new Date(returnedAt) : new Date(),
+    returnedBy: (req as any).user?.id,
+    returnedByName: (req as any).user?.name,
     updatedAt: new Date(),
   };
 

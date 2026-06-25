@@ -148,6 +148,43 @@ function normalizeSpareRequestParts(input: unknown): NonNullable<Complaint["spar
     .filter(Boolean) as NonNullable<Complaint["spareParts"]>;
 }
 
+function normalizeComplaintSpareParts(complaint: Complaint) {
+  const directParts = Array.isArray(complaint.spareParts) ? complaint.spareParts : [];
+  if (directParts.length) {
+    return directParts
+      .map((part, index) => ({
+        id: normalizeText(part?.id) || `${complaint.id}-spare-${index}`,
+        series: normalizeText(part?.series) || undefined,
+        rawMaterialId: normalizeText(part?.rawMaterialId) || undefined,
+        materialName: normalizeText(part?.materialName),
+        availableQuantity: Number.isFinite(Number(part?.availableQuantity)) ? Number(part?.availableQuantity) : undefined,
+        quantity: Number(part?.quantity) || 0,
+        notes: normalizeText(part?.notes) || undefined,
+      }))
+      .filter((part) => part.materialName && part.quantity > 0);
+  }
+
+  const spareName = normalizeText(complaint.spareName);
+  const spareQuantity = Number(complaint.spareQuantity);
+  if (!spareName || !Number.isFinite(spareQuantity) || spareQuantity <= 0) return [];
+  return [{
+    id: `${complaint.id}-legacy-spare`,
+    materialName: spareName,
+    quantity: spareQuantity,
+    notes: normalizeText(complaint.dispatchPlan) || undefined,
+  }];
+}
+
+function complaintNeedsSpareApproval(complaint: Complaint) {
+  const status = String(complaint.spareRequestStatus ?? "");
+  return Boolean(complaint.spareRequired || normalizeComplaintSpareParts(complaint).length) && !["Approved", "Dispatched", "Delivered"].includes(status);
+}
+
+function complaintNeedsReplacementApproval(complaint: Complaint) {
+  const approvalStatus = String(complaint.replacementApprovalStatus ?? "");
+  return Boolean(complaint.replacementRecommended || normalizeText(complaint.replacementSerialNo)) && !["Approved", "Rejected"].includes(approvalStatus);
+}
+
 function normalizeLookup(value: unknown) {
   return normalizeText(value).toLowerCase().replace(/\s+/g, " ");
 }
@@ -964,6 +1001,7 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     replacementModelName,
     replacementProductName,
     replacementProductNo,
+    replacementRequestSerialNo,
     replacementSerialNo,
     replacementEngineerId,
     replacementEngineerName,
@@ -1129,6 +1167,7 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     replacementModelName,
     replacementProductName,
     replacementProductNo,
+    replacementRequestSerialNo,
     replacementSerialNo,
     replacementEngineerId,
     replacementEngineerName,
@@ -1378,6 +1417,7 @@ router.put(
       "replacementModelName",
       "replacementProductName",
       "replacementProductNo",
+      "replacementRequestSerialNo",
       "replacementSerialNo",
       "replacementEngineerId",
       "replacementEngineerName",
@@ -1661,36 +1701,32 @@ router.put(
 
     if (wantsDispatchApproval) {
       update.replacementRecommended = true;
-      update.replacementApprovalStatus = "Approved";
-      update.replacementApprovedById = req.body.replacementApprovedById ?? user.userId;
-      update.replacementApprovedByName = req.body.replacementApprovedByName ?? user.name ?? user.email;
-      update.replacementApprovedByRole = req.body.replacementApprovedByRole ?? user.role;
-      update.replacementApprovedAt = req.body.replacementApprovedAt ? new Date(req.body.replacementApprovedAt) : serverNow;
+      update.replacementApprovalStatus = "Pending";
       update.replacementRequestedById = update.replacementRequestedById ?? existing.replacementRequestedById ?? user.userId;
       update.replacementRequestedByName = update.replacementRequestedByName ?? existing.replacementRequestedByName ?? user.name ?? user.email;
       update.replacementRequestedByRole = update.replacementRequestedByRole ?? existing.replacementRequestedByRole ?? user.role;
       update.replacementRequestedAt = update.replacementRequestedAt ?? existing.replacementRequestedAt ?? serverNow;
       update.status = "Awaiting Dispatch";
       workflowHistory.push(createWorkflowHistoryEvent({
-        action: "Approved replacement request",
+        action: "Queued replacement request for manufacturing approval",
         fromStatus: existing.status,
         toStatus: "Awaiting Dispatch",
         user,
-        note: "Approved replacement request forwarded to Dispatch Team.",
+        note: "Replacement request forwarded to Manufactured Products for approval.",
       }));
       extraNotifications.push({
         id: generateId(),
         type: "complaint_workflow_updated",
-        title: "Replacement request approved",
-        body: `${existing.productSerialNo || "No serial"} sent to Dispatch Team.`,
+        title: "Replacement approval requested",
+        body: `${existing.productSerialNo || "No serial"} sent to Manufactured Products for approval.`,
         entityType: "complaint",
         entityId: existing.id,
         meta: {
           status: "Awaiting Dispatch",
-          replacementApprovalStatus: "Approved",
+          replacementApprovalStatus: "Pending",
           replacementRequestedByName: update.replacementRequestedByName,
         },
-        audienceRoles: ["Dispatch"],
+        audienceRoles: ["Inventory"],
         readBy: [],
         createdBy: user.userId,
         createdAt: serverNow,

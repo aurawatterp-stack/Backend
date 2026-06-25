@@ -17,7 +17,6 @@ exports.createOrUpdateEngineerAssignment = createOrUpdateEngineerAssignment;
 exports.deleteEngineerAssignment = deleteEngineerAssignment;
 exports.listEngineerAssignmentAudit = listEngineerAssignmentAudit;
 exports.importEngineerAssignmentsFromWorkbook = importEngineerAssignmentsFromWorkbook;
-const node_child_process_1 = require("node:child_process");
 const node_fs_1 = __importDefault(require("node:fs"));
 const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
@@ -44,13 +43,27 @@ function columnIndexFromRef(cellRef) {
     }
     return Math.max(0, index - 1);
 }
-function readXmlFromXlsx(filePath, entryPath) {
+const adm_zip_1 = __importDefault(require("adm-zip"));
+function workbookRows(filePath) {
+    let sharedStringsXml = "";
+    let sheetXml = "";
     try {
-        return (0, node_child_process_1.execFileSync)("unzip", ["-p", filePath, entryPath], { encoding: "utf8", maxBuffer: 20 * 1024 * 1024 });
+        const zip = new adm_zip_1.default(filePath);
+        const entries = zip.getEntries();
+        const sharedStringsEntry = entries.find((e) => e.entryName.toLowerCase().includes("sharedstrings.xml"));
+        if (sharedStringsEntry) {
+            sharedStringsXml = sharedStringsEntry.getData().toString("utf8");
+        }
+        const sheetEntry = entries.find((e) => e.entryName.toLowerCase().startsWith("xl/worksheets/") && e.entryName.toLowerCase().endsWith(".xml"));
+        if (sheetEntry) {
+            sheetXml = sheetEntry.getData().toString("utf8");
+        }
     }
-    catch {
-        return "";
+    catch (err) {
+        console.warn(`Failed to read XLSX entries from ${filePath}`, err);
     }
+    const sharedStrings = parseSharedStrings(sharedStringsXml);
+    return parseWorksheetRows(sheetXml, sharedStrings);
 }
 function parseSharedStrings(xml) {
     if (!xml)
@@ -136,8 +149,7 @@ async function parseEngineerAssignmentWorkbook(filePath) {
     const tempPath = node_path_1.default.join(node_os_1.default.tmpdir(), `engineer-assignment-${Date.now()}-${Math.random().toString(16).slice(2)}.xlsx`);
     node_fs_1.default.copyFileSync(filePath, tempPath);
     try {
-        const sharedStrings = parseSharedStrings(readXmlFromXlsx(tempPath, "xl/sharedStrings.xml"));
-        const rows = parseWorksheetRows(readXmlFromXlsx(tempPath, "xl/worksheets/sheet1.xml"), sharedStrings);
+        const rows = workbookRows(tempPath);
         if (!rows.length) {
             throw new Error("Workbook is empty");
         }

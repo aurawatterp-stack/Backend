@@ -2,7 +2,7 @@ import express, { type Request, type Response, type Router } from "express";
 
 import { getCollections } from "../db/collections";
 import { authenticate, requireAnyPermission } from "../middleware/auth";
-import type { ManufacturedProduct } from "../types";
+import type { AuthUser, Complaint, ManufacturedProduct, Notification, RawMaterial } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 import { updateSerialStatus } from "../utils/serialLifecycle";
@@ -34,6 +34,111 @@ function usageByRawMaterial(usage: ManufacturedProduct["bomUsage"] | undefined) 
     map.set(item.rawMaterialId, (map.get(item.rawMaterialId) ?? 0) + (Number(item.quantityUsed) || 0));
   }
   return map;
+}
+
+function normalizeText(value: unknown) {
+  return String(value ?? "").trim();
+}
+
+function complaintSpareParts(complaint: Complaint) {
+  if (Array.isArray(complaint.spareParts) && complaint.spareParts.length) {
+    return complaint.spareParts
+      .map((part, index) => ({
+        id: normalizeText(part.id) || `${complaint.id}-${index}`,
+        series: normalizeText(part.series) || undefined,
+        rawMaterialId: normalizeText(part.rawMaterialId) || undefined,
+        materialName: normalizeText(part.materialName),
+        quantity: Number(part.quantity) || 0,
+        notes: normalizeText(part.notes) || undefined,
+      }))
+      .filter((part) => part.materialName && part.quantity > 0);
+  }
+
+  const materialName = normalizeText(complaint.spareName);
+  const quantity = Number(complaint.spareQuantity) || 0;
+  if (!materialName || quantity <= 0) return [];
+  return [{
+    id: `${complaint.id}-spare`,
+    series: undefined,
+    rawMaterialId: normalizeText(complaint.rawMaterialId) || undefined,
+    materialName,
+    quantity,
+    notes: normalizeText(complaint.dispatchPlan) || undefined,
+  }];
+}
+
+function replacementLabel(complaint: Complaint) {
+  return [
+    complaint.replacementSeriesName || complaint.replacementProductName,
+    complaint.replacementModelName || complaint.replacementProductNo,
+  ].filter(Boolean).join(" ") || "Replacement inverter";
+}
+
+async function insertDispatchApprovalNotification(
+  c: Awaited<ReturnType<typeof getCollections>>,
+  complaint: Complaint,
+  user: AuthUser,
+  title: string,
+  body: string,
+  meta: Record<string, unknown>
+) {
+  const notification: Notification = {
+    id: generateId(),
+    type: "complaint_workflow_updated",
+    title,
+    body,
+    entityType: "complaint",
+    entityId: complaint.id,
+    meta,
+    audienceRoles: ["Dispatch"],
+    readBy: [],
+    createdBy: user.userId,
+    createdAt: new Date(),
+  };
+  await c.notifications.insertOne(notification);
+}
+
+async function resolveRawMaterialDeductions(
+  c: Awaited<ReturnType<typeof getCollections>>,
+  parts: ReturnType<typeof complaintSpareParts>
+) {
+  const deductions: Array<{ raw: RawMaterial; quantity: number; partName: string }> = [];
+
+  for (const part of parts) {
+    let remaining = part.quantity;
+    const selectedRows: RawMaterial[] = [];
+
+    if (part.rawMaterialId) {
+      const raw = await c.rawMaterials.findOne({ id: part.rawMaterialId });
+      if (!raw) return { error: `${part.materialName} raw material entry not found` as const };
+      selectedRows.push(raw);
+    } else {
+      selectedRows.push(...await c.rawMaterials
+        .find({
+          materialName: part.materialName,
+          ...(part.series ? { productSeriesId: part.series } : {}),
+          quantityAvailable: { $gt: 0 },
+        })
+        .sort({ dateReceived: 1, createdAt: 1 })
+        .toArray());
+    }
+
+    for (const raw of selectedRows) {
+      if (remaining <= 0) break;
+      const quantity = Math.min(Number(raw.quantityAvailable) || 0, remaining);
+      if (quantity <= 0) continue;
+      deductions.push({ raw, quantity, partName: part.materialName });
+      remaining -= quantity;
+    }
+
+    if (remaining > 0) {
+      return {
+        error: `${part.materialName} stock insufficient. Required ${part.quantity}, available ${part.quantity - remaining}.` as const,
+      };
+    }
+  }
+
+  return { deductions };
 }
 
 async function resolveManufacturingSerial(
@@ -204,6 +309,165 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
   return ok(res, entry, 201);
 });
 
+/** GET /api/manufactured/approval-requests - service spares/replacements awaiting inventory approval */
+router.get("/approval-requests", authenticate, requireAnyPermission("inventory:manufactured"), async (_req: Request, res: Response) => {
+  const c = await getCollections();
+  const filter = {
+    type: "Consumer",
+    $or: [
+      {
+        spareRequestStatus: "Requested",
+        $or: [{ replacementRecommended: { $ne: true } }, { replacementRecommended: { $exists: false } }],
+        $and: [{
+        $or: [
+          { spareRequired: true },
+          { spareParts: { $exists: true, $ne: [] } },
+          { spareName: { $exists: true, $ne: "" } },
+        ],
+        }],
+      },
+      {
+        replacementRecommended: true,
+        replacementApprovalStatus: "Pending",
+      },
+    ],
+  };
+
+  const data = await c.complaints.find(filter).sort({ updatedAt: -1, createdAt: -1 }).limit(200).toArray();
+  return ok(res, { data, total: data.length, page: 1, limit: 200 });
+});
+
+/** POST /api/manufactured/approval-requests/:id/approve - approve stock release and notify Dispatch */
+router.post("/approval-requests/:id/approve", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+  const c = await getCollections();
+  const user = (req as any).user as AuthUser;
+  const complaint = await c.complaints.findOne({ id: req.params.id });
+  if (!complaint) return fail(res, "Approval request not found", 404);
+
+  const now = new Date();
+  const note = normalizeText(req.body?.note) || "Approved from Manufactured Products.";
+  const serialFromRequest = normalizeText(req.body?.replacementSerialNo);
+  const isReplacement = Boolean(complaint.replacementRecommended || complaint.replacementApprovalStatus === "Pending");
+  const parts = complaintSpareParts(complaint);
+
+  if (!isReplacement && !parts.length) {
+    return fail(res, "No spare parts found for approval", 400);
+  }
+
+  const update: Partial<Complaint> = {
+    updatedAt: now,
+    spareInventoryStatus: "Available",
+    spareRequestStatus: "Approved",
+    status: "Awaiting Dispatch",
+    trackingNotes: `${complaint.trackingNotes ? `${complaint.trackingNotes}\n` : ""}${note} at ${now.toLocaleString()}.`,
+    workflowHistory: [
+      ...(complaint.workflowHistory ?? []),
+      {
+        id: generateId(),
+        action: isReplacement ? "Replacement inventory approved" : "Spare inventory approved",
+        fromStatus: complaint.status,
+        toStatus: "Awaiting Dispatch",
+        by: user.userId,
+        byName: user.name,
+        byRole: user.role,
+        at: now,
+        note,
+      },
+    ],
+  };
+
+  if (isReplacement) {
+    const replacementSerialNo = serialFromRequest;
+    if (!replacementSerialNo) return fail(res, "New replacement stock serial number is required", 400);
+
+    const manufactured = await c.manufactured.findOne({ serialNumber: replacementSerialNo });
+    if (!manufactured) return fail(res, "Replacement serial not found in Manufactured Products", 404);
+    if (manufactured.status !== "In Stock") return fail(res, "Replacement serial must be In Stock before approval", 400);
+
+    await c.manufactured.updateOne(
+      { id: manufactured.id },
+      {
+        $set: {
+          status: "Sold",
+          invoiceNo: complaint.id,
+          paymentStatus: "N/A",
+          soldDate: now,
+          updatedAt: now,
+        },
+      }
+    );
+    await updateSerialStatus(c, { serialNumber: replacementSerialNo, status: "Dispatched" });
+    await c.inventoryLogs.insertOne({
+      id: generateId(),
+      type: "Replacement Dispatch",
+      itemId: manufactured.id,
+      itemName: `${replacementLabel(complaint)} (${replacementSerialNo})`,
+      quantityChange: -1,
+      referenceId: complaint.id,
+      notes: `Approved replacement for service ticket ${complaint.id}`,
+      createdAt: now,
+      createdBy: user.email || user.name || "System",
+    });
+
+    update.replacementSerialNo = replacementSerialNo;
+    update.replacementApprovalStatus = "Approved";
+    update.replacementApprovedById = user.userId;
+    update.replacementApprovedByName = user.name ?? user.email;
+    update.replacementApprovedByRole = user.role;
+    update.replacementApprovedAt = now;
+
+    await c.complaints.updateOne({ id: complaint.id }, { $set: update });
+    const updated = await c.complaints.findOne({ id: complaint.id });
+    await insertDispatchApprovalNotification(
+      c,
+      complaint,
+      user,
+      "Replacement approved for dispatch",
+      `${replacementSerialNo} approved from Manufactured Products.`,
+      {
+        status: "Awaiting Dispatch",
+        replacementRequestSerialNo: complaint.replacementRequestSerialNo || complaint.productSerialNo,
+        replacementSerialNo,
+        replacementApprovalStatus: "Approved",
+      }
+    );
+    return ok(res, updated);
+  }
+
+  const resolved = await resolveRawMaterialDeductions(c, parts);
+  if ("error" in resolved) return fail(res, resolved.error ?? "Raw material stock could not be resolved", 400);
+
+  for (const deduction of resolved.deductions) {
+    await c.rawMaterials.updateOne(
+      { id: deduction.raw.id },
+      { $inc: { quantityAvailable: -deduction.quantity }, $set: { updatedAt: now } }
+    );
+    await c.inventoryLogs.insertOne({
+      id: generateId(),
+      type: "Spare Dispatch",
+      itemId: deduction.raw.id,
+      itemName: `${deduction.raw.materialName} (${deduction.raw.batch ?? "No Batch"})`,
+      quantityChange: -deduction.quantity,
+      referenceId: complaint.id,
+      notes: `Approved spare for service ticket ${complaint.id}`,
+      createdAt: now,
+      createdBy: user.email || user.name || "System",
+    });
+  }
+
+  await c.complaints.updateOne({ id: complaint.id }, { $set: update });
+  const updated = await c.complaints.findOne({ id: complaint.id });
+  await insertDispatchApprovalNotification(
+    c,
+    complaint,
+    user,
+    "Spare approved for dispatch",
+    `${parts.map((part) => `${part.materialName} x ${part.quantity}`).join(", ")} approved from Manufactured Products.`,
+    { status: "Awaiting Dispatch", spareRequestStatus: "Approved" }
+  );
+  return ok(res, updated);
+});
+
 /** PUT /api/manufactured/:id/bom — modify BOM and adjust raw material stock by delta only */
 router.put("/:id/bom", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
   const c = await getCollections();
@@ -274,8 +538,8 @@ router.post("/:id/return", authenticate, requireAnyPermission("inventory:manufac
     status: "Returned" as const,
     returnReason: returnReason || "",
     returnedAt: new Date(),
-    returnedBy: req.user?.id,
-    returnedByName: req.user?.name,
+    returnedBy: (req as any).user?.id,
+    returnedByName: (req as any).user?.name,
     replacedWithSerial: replacedWithSerial || "",
     updatedAt
   };

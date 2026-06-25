@@ -132,6 +132,40 @@ function normalizeSpareRequestParts(input) {
     })
         .filter(Boolean);
 }
+function normalizeComplaintSpareParts(complaint) {
+    const directParts = Array.isArray(complaint.spareParts) ? complaint.spareParts : [];
+    if (directParts.length) {
+        return directParts
+            .map((part, index) => ({
+            id: normalizeText(part?.id) || `${complaint.id}-spare-${index}`,
+            series: normalizeText(part?.series) || undefined,
+            rawMaterialId: normalizeText(part?.rawMaterialId) || undefined,
+            materialName: normalizeText(part?.materialName),
+            availableQuantity: Number.isFinite(Number(part?.availableQuantity)) ? Number(part?.availableQuantity) : undefined,
+            quantity: Number(part?.quantity) || 0,
+            notes: normalizeText(part?.notes) || undefined,
+        }))
+            .filter((part) => part.materialName && part.quantity > 0);
+    }
+    const spareName = normalizeText(complaint.spareName);
+    const spareQuantity = Number(complaint.spareQuantity);
+    if (!spareName || !Number.isFinite(spareQuantity) || spareQuantity <= 0)
+        return [];
+    return [{
+            id: `${complaint.id}-legacy-spare`,
+            materialName: spareName,
+            quantity: spareQuantity,
+            notes: normalizeText(complaint.dispatchPlan) || undefined,
+        }];
+}
+function complaintNeedsSpareApproval(complaint) {
+    const status = String(complaint.spareRequestStatus ?? "");
+    return Boolean(complaint.spareRequired || normalizeComplaintSpareParts(complaint).length) && !["Approved", "Dispatched", "Delivered"].includes(status);
+}
+function complaintNeedsReplacementApproval(complaint) {
+    const approvalStatus = String(complaint.replacementApprovalStatus ?? "");
+    return Boolean(complaint.replacementRecommended || normalizeText(complaint.replacementSerialNo)) && !["Approved", "Rejected"].includes(approvalStatus);
+}
 function normalizeLookup(value) {
     return normalizeText(value).toLowerCase().replace(/\s+/g, " ");
 }
@@ -795,7 +829,7 @@ router.post("/upload-inverter-picture", auth_1.authenticate, (0, auth_1.requireA
 /** POST /api/complaints — raise a consumer or supplier complaint */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, state, district, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareParts, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, dispatchLrCopyName, dispatchLrCopyUrl, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, siteVisitEngineerId, siteVisitEngineerName, siteVisitRequestedById, siteVisitRequestedByName, siteVisitRequestedByRole, siteVisitRequestedAt, siteVisitRemarks, siteVisitSpareParts, siteVisitScheduledDate, siteVisitAssignedById, siteVisitAssignedByName, siteVisitAssignedByRole, engineerName, l3SupportRequired, replacementReason, replacementRemarks, replacementRequestImages, replacementRequestedById, replacementRequestedByName, replacementRequestedByRole, replacementRequestedAt, replacementApprovedById, replacementApprovedByName, replacementApprovedByRole, replacementApprovedAt, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
+    const { type, productSerialNo, customerName, rawMaterialId, rawMaterialName, vendorName, dateOfSale, dateOfComplaint, issueDescription, ticketSource, l1Sla, dealerName, siteLocation, region, state, district, priority, warrantyStatus, productModel, forceAssign, backupEngineerName, initialAction, trackingNotes, escalationLevel, l1Inspection, onsiteInspection, serviceStartedAt, progressUpdates, technicalDiagnosis, spareRequired, spareName, spareQuantity, spareDispatchAddress, spareParts, spareInventoryStatus, spareRequestStatus, dispatchTrackingNo, dispatchLrCopyName, dispatchLrCopyUrl, procurementStatus, chargeableApprovalStatus, paymentVerificationStatus, replacementApprovalStatus, replacementRecommended, replacementSeriesName, replacementModelName, replacementProductName, replacementProductNo, replacementRequestSerialNo, replacementSerialNo, replacementEngineerId, replacementEngineerName, dispatchPlan, siteVisitRequired, siteVisitEngineerId, siteVisitEngineerName, siteVisitRequestedById, siteVisitRequestedByName, siteVisitRequestedByRole, siteVisitRequestedAt, siteVisitRemarks, siteVisitSpareParts, siteVisitScheduledDate, siteVisitAssignedById, siteVisitAssignedByName, siteVisitAssignedByRole, engineerName, l3SupportRequired, replacementReason, replacementRemarks, replacementRequestImages, replacementRequestedById, replacementRequestedByName, replacementRequestedByRole, replacementRequestedAt, replacementApprovedById, replacementApprovedByName, replacementApprovedByRole, replacementApprovedAt, finalResolution, clientFeedback, closureReport, closeRemark, closedByName, closedByRole, closedAt, } = req.body;
     const mobileNumber = req.body.mobileNumber ?? req.body.customerPhone;
     const customerEmail = (0, validation_1.normalizeEmailAddress)(req.body.customerEmail);
     const installationDate = req.body.installationDate ?? dateOfSale;
@@ -916,6 +950,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         replacementModelName,
         replacementProductName,
         replacementProductNo,
+        replacementRequestSerialNo,
         replacementSerialNo,
         replacementEngineerId,
         replacementEngineerName,
@@ -1137,6 +1172,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "replacementModelName",
         "replacementProductName",
         "replacementProductNo",
+        "replacementRequestSerialNo",
         "replacementSerialNo",
         "replacementEngineerId",
         "replacementEngineerName",
@@ -1418,36 +1454,32 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     }
     if (wantsDispatchApproval) {
         update.replacementRecommended = true;
-        update.replacementApprovalStatus = "Approved";
-        update.replacementApprovedById = req.body.replacementApprovedById ?? user.userId;
-        update.replacementApprovedByName = req.body.replacementApprovedByName ?? user.name ?? user.email;
-        update.replacementApprovedByRole = req.body.replacementApprovedByRole ?? user.role;
-        update.replacementApprovedAt = req.body.replacementApprovedAt ? new Date(req.body.replacementApprovedAt) : serverNow;
+        update.replacementApprovalStatus = "Pending";
         update.replacementRequestedById = update.replacementRequestedById ?? existing.replacementRequestedById ?? user.userId;
         update.replacementRequestedByName = update.replacementRequestedByName ?? existing.replacementRequestedByName ?? user.name ?? user.email;
         update.replacementRequestedByRole = update.replacementRequestedByRole ?? existing.replacementRequestedByRole ?? user.role;
         update.replacementRequestedAt = update.replacementRequestedAt ?? existing.replacementRequestedAt ?? serverNow;
         update.status = "Awaiting Dispatch";
         workflowHistory.push(createWorkflowHistoryEvent({
-            action: "Approved replacement request",
+            action: "Queued replacement request for manufacturing approval",
             fromStatus: existing.status,
             toStatus: "Awaiting Dispatch",
             user,
-            note: "Approved replacement request forwarded to Dispatch Team.",
+            note: "Replacement request forwarded to Manufactured Products for approval.",
         }));
         extraNotifications.push({
             id: (0, id_1.generateId)(),
             type: "complaint_workflow_updated",
-            title: "Replacement request approved",
-            body: `${existing.productSerialNo || "No serial"} sent to Dispatch Team.`,
+            title: "Replacement approval requested",
+            body: `${existing.productSerialNo || "No serial"} sent to Manufactured Products for approval.`,
             entityType: "complaint",
             entityId: existing.id,
             meta: {
                 status: "Awaiting Dispatch",
-                replacementApprovalStatus: "Approved",
+                replacementApprovalStatus: "Pending",
                 replacementRequestedByName: update.replacementRequestedByName,
             },
-            audienceRoles: ["Dispatch"],
+            audienceRoles: ["Inventory"],
             readBy: [],
             createdBy: user.userId,
             createdAt: serverNow,

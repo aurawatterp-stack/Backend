@@ -606,6 +606,7 @@ export type Complaint = {
   replacementModelName?: string;
   replacementProductName?: string;
   replacementProductNo?: string;
+  replacementRequestSerialNo?: string;
   replacementSerialNo?: string;
   replacementEngineerId?: string;
   replacementEngineerName?: string;

@@ -128,4 +128,29 @@ router.delete("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inv
         return (0, http_1.fail)(res, "Raw material entry not found", 404);
     return (0, http_1.ok)(res, { message: "Raw material entry deleted" });
 });
+/** POST /api/raw-materials/:id/return */
+router.post("/:id/return", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:raw-materials"), async (req, res) => {
+    const c = await (0, collections_1.getCollections)();
+    const id = req.params.id;
+    const { returnReason, returnedQuantity, returnStatus, returnedAt } = req.body;
+    if (typeof returnedQuantity !== "number" || returnedQuantity <= 0)
+        return (0, http_1.fail)(res, "Invalid returned quantity");
+    const existing = await c.rawMaterials.findOne({ id });
+    if (!existing)
+        return (0, http_1.fail)(res, "Raw material entry not found", 404);
+    if (existing.quantityAvailable < returnedQuantity)
+        return (0, http_1.fail)(res, "Not enough available quantity to return");
+    const update = {
+        quantityAvailable: existing.quantityAvailable - returnedQuantity,
+        returnStatus: returnStatus || "Returned to Vendor",
+        returnedQuantity: returnedQuantity + (existing.returnedQuantity || 0),
+        returnReason: returnReason || existing.returnReason,
+        returnedAt: returnedAt ? new Date(returnedAt) : new Date(),
+        returnedBy: req.user?.id,
+        returnedByName: req.user?.name,
+        updatedAt: new Date(),
+    };
+    await c.rawMaterials.updateOne({ id }, { $set: update });
+    return (0, http_1.ok)(res, { ...existing, ...update });
+});
 exports.default = router;
