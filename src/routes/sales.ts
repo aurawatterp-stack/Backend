@@ -61,6 +61,14 @@ function normalizePriceCategoryForRegistration(isRegistered: boolean, priceCateg
   return REGISTERED_PRICE_CATEGORY;
 }
 
+async function insertNotification(c: SalesCollections, notification: Notification) {
+  try {
+    await c.notifications.insertOne(notification);
+  } catch (err) {
+    console.warn("Failed to insert sales notification:", err instanceof Error ? err.message : String(err));
+  }
+}
+
 function escapeRegExp(value: string) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -190,15 +198,18 @@ function runPiUpload(req: Request, res: Response, next: NextFunction) {
 /** GET /api/sales */
 router.get("/", authenticate, requireAnyPermission("sales:entry", "dispatch:manage", "accounts:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
+  const user = (req as any).user as AuthUser;
   const { page = "1", limit = "20", sort = "" } = req.query as Record<string, string>;
   const p = Math.max(1, parseInt(page));
   const l = Math.min(100, parseInt(limit));
   const sortSpec: Record<string, 1 | -1> = sort === "accountsQueue"
     ? { accountsRequestAt: -1 as const, createdAt: -1 as const, saleDate: -1 as const }
     : { saleDate: -1 as const };
-  const total = await c.sales.countDocuments({});
+  const canSeeAllSales = user.role === "Admin" || user.permissions.includes("dispatch:manage") || user.permissions.includes("accounts:manage");
+  const filter = canSeeAllSales ? {} : { $or: [{ createdBy: user.userId }, { "piWorkflowHistory.0.by": user.userId }] };
+  const total = await c.sales.countDocuments(filter);
   const data = await c.sales
-    .find({})
+    .find(filter)
     .sort(sortSpec)
     .skip((p - 1) * l)
     .limit(l)
@@ -377,6 +388,26 @@ router.post("/:id/approve-force-pi", authenticate, authorize("Admin"), async (re
 
   await c.sales.updateOne({ id }, { $set: update });
   const approved = await c.sales.findOne({ id });
+  if (approved?.createdBy) {
+    await insertNotification(c, {
+      id: generateId(),
+      type: "sale_recorded",
+      title: "PI Request Approved",
+      body: `${approved.referenceNo} has been approved. You can now generate the PI.`,
+      entityType: "sale",
+      entityId: approved.id,
+      meta: {
+        referenceNo: approved.referenceNo,
+        saleId: approved.id,
+        approvedBy: user.userId,
+        approvedByName: user.name,
+      },
+      audienceUserIds: [approved.createdBy],
+      readBy: [],
+      createdBy: user.userId,
+      createdAt: new Date(),
+    });
+  }
   return ok(res, approved);
 });
 
@@ -952,41 +983,54 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
   await c.sales.insertOne(sale);
 
   // Best-effort notification (never fail the main operation).
-  try {
-    const notification: Notification = {
-      id: generateId(),
-      type: "sale_recorded",
-      title: isWorkflowEntry ? "New Sales Workflow PI" : isDispatchEntry ? "Dispatch Planning Updated" : "New Sale Recorded",
-      body: `${finalReferenceNo} â€¢ ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
-      entityType: "sale",
-      entityId: sale.id,
-      meta: {
-        serialNumber,
-        referenceNo: finalReferenceNo,
-        customerId,
-        shipToAddressKey,
-        materialName,
-        quantity,
-        piItems: parsedPiItems,
-        stateRegion,
-        piAttachmentName,
-        piAttachmentUrl,
-        expectedDispatchDate,
-        confirmedDispatchDate,
-        dispatchStatus,
-        courierDocketNo,
-        courierDocketAttachmentName,
-        courierDocketAttachmentUrl,
-      },
-      audienceRoles: isWorkflowEntry ? ["Admin", "Accounts", "Accounts Team"] : ["Admin", "Sales", "Inventory"],
-      readBy: [],
-      createdBy: user.userId,
-      createdAt: new Date(),
-    };
-    await c.notifications.insertOne(notification);
-  } catch (err) {
-    console.warn("Failed to insert notification:", err instanceof Error ? err.message : String(err));
-  }
+  const notificationTitle = sale.forcePiApprovalStatus === "Pending"
+    ? inventoryStatus === "Insufficient"
+      ? "Stock Approval Request"
+      : "PI Approval Request"
+    : isWorkflowEntry
+      ? "New Sales Workflow PI"
+      : isDispatchEntry
+        ? "Dispatch Planning Updated"
+        : "New Sale Recorded";
+  const notificationAudience = sale.forcePiApprovalStatus === "Pending"
+    ? ["Admin"]
+    : isWorkflowEntry
+      ? ["Admin", "Accounts", "Accounts Team"]
+      : ["Admin", "Sales", "Inventory"];
+  await insertNotification(c, {
+    id: generateId(),
+    type: "sale_recorded",
+    title: notificationTitle,
+    body: sale.forcePiApprovalStatus === "Pending"
+      ? `${finalReferenceNo} requires admin approval${inventoryStatus === "Insufficient" ? " because stock is unavailable" : ""}.`
+      : `${finalReferenceNo} â€¢ ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
+    entityType: "sale",
+    entityId: sale.id,
+    meta: {
+      serialNumber,
+      referenceNo: finalReferenceNo,
+      customerId,
+      shipToAddressKey,
+      materialName,
+      quantity,
+      piItems: parsedPiItems,
+      stateRegion,
+      piAttachmentName,
+      piAttachmentUrl,
+      expectedDispatchDate,
+      confirmedDispatchDate,
+      dispatchStatus,
+      courierDocketNo,
+      courierDocketAttachmentName,
+      courierDocketAttachmentUrl,
+      inventoryStatus,
+      forcePiApprovalStatus: sale.forcePiApprovalStatus,
+    },
+    audienceRoles: notificationAudience as Notification["audienceRoles"],
+    readBy: [],
+    createdBy: user.userId,
+    createdAt: new Date(),
+  });
 
   return ok(res, sale, 201);
 });

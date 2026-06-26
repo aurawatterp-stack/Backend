@@ -58,6 +58,14 @@ function normalizePriceCategoryForRegistration(isRegistered, priceCategory) {
     }
     return REGISTERED_PRICE_CATEGORY;
 }
+async function insertNotification(c, notification) {
+    try {
+        await c.notifications.insertOne(notification);
+    }
+    catch (err) {
+        console.warn("Failed to insert sales notification:", err instanceof Error ? err.message : String(err));
+    }
+}
 function escapeRegExp(value) {
     return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
@@ -163,15 +171,18 @@ function runPiUpload(req, res, next) {
 /** GET /api/sales */
 router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry", "dispatch:manage", "accounts:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
+    const user = req.user;
     const { page = "1", limit = "20", sort = "" } = req.query;
     const p = Math.max(1, parseInt(page));
     const l = Math.min(100, parseInt(limit));
     const sortSpec = sort === "accountsQueue"
         ? { accountsRequestAt: -1, createdAt: -1, saleDate: -1 }
         : { saleDate: -1 };
-    const total = await c.sales.countDocuments({});
+    const canSeeAllSales = user.role === "Admin" || user.permissions.includes("dispatch:manage") || user.permissions.includes("accounts:manage");
+    const filter = canSeeAllSales ? {} : { $or: [{ createdBy: user.userId }, { "piWorkflowHistory.0.by": user.userId }] };
+    const total = await c.sales.countDocuments(filter);
     const data = await c.sales
-        .find({})
+        .find(filter)
         .sort(sortSpec)
         .skip((p - 1) * l)
         .limit(l)
@@ -340,6 +351,26 @@ router.post("/:id/approve-force-pi", auth_1.authenticate, (0, auth_1.authorize)(
         update.paymentStatus = paymentStatus;
     await c.sales.updateOne({ id }, { $set: update });
     const approved = await c.sales.findOne({ id });
+    if (approved?.createdBy) {
+        await insertNotification(c, {
+            id: (0, id_1.generateId)(),
+            type: "sale_recorded",
+            title: "PI Request Approved",
+            body: `${approved.referenceNo} has been approved. You can now generate the PI.`,
+            entityType: "sale",
+            entityId: approved.id,
+            meta: {
+                referenceNo: approved.referenceNo,
+                saleId: approved.id,
+                approvedBy: user.userId,
+                approvedByName: user.name,
+            },
+            audienceUserIds: [approved.createdBy],
+            readBy: [],
+            createdBy: user.userId,
+            createdAt: new Date(),
+        });
+    }
     return (0, http_1.ok)(res, approved);
 });
 /** POST /api/sales/upload-docket â€” upload courier docket file to Cloudinary */
@@ -821,42 +852,54 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
         sale.paymentStatus = paymentStatus;
     await c.sales.insertOne(sale);
     // Best-effort notification (never fail the main operation).
-    try {
-        const notification = {
-            id: (0, id_1.generateId)(),
-            type: "sale_recorded",
-            title: isWorkflowEntry ? "New Sales Workflow PI" : isDispatchEntry ? "Dispatch Planning Updated" : "New Sale Recorded",
-            body: `${finalReferenceNo} â€¢ ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
-            entityType: "sale",
-            entityId: sale.id,
-            meta: {
-                serialNumber,
-                referenceNo: finalReferenceNo,
-                customerId,
-                shipToAddressKey,
-                materialName,
-                quantity,
-                piItems: parsedPiItems,
-                stateRegion,
-                piAttachmentName,
-                piAttachmentUrl,
-                expectedDispatchDate,
-                confirmedDispatchDate,
-                dispatchStatus,
-                courierDocketNo,
-                courierDocketAttachmentName,
-                courierDocketAttachmentUrl,
-            },
-            audienceRoles: isWorkflowEntry ? ["Admin", "Accounts", "Accounts Team"] : ["Admin", "Sales", "Inventory"],
-            readBy: [],
-            createdBy: user.userId,
-            createdAt: new Date(),
-        };
-        await c.notifications.insertOne(notification);
-    }
-    catch (err) {
-        console.warn("Failed to insert notification:", err instanceof Error ? err.message : String(err));
-    }
+    const notificationTitle = sale.forcePiApprovalStatus === "Pending"
+        ? inventoryStatus === "Insufficient"
+            ? "Stock Approval Request"
+            : "PI Approval Request"
+        : isWorkflowEntry
+            ? "New Sales Workflow PI"
+            : isDispatchEntry
+                ? "Dispatch Planning Updated"
+                : "New Sale Recorded";
+    const notificationAudience = sale.forcePiApprovalStatus === "Pending"
+        ? ["Admin"]
+        : isWorkflowEntry
+            ? ["Admin", "Accounts", "Accounts Team"]
+            : ["Admin", "Sales", "Inventory"];
+    await insertNotification(c, {
+        id: (0, id_1.generateId)(),
+        type: "sale_recorded",
+        title: notificationTitle,
+        body: sale.forcePiApprovalStatus === "Pending"
+            ? `${finalReferenceNo} requires admin approval${inventoryStatus === "Insufficient" ? " because stock is unavailable" : ""}.`
+            : `${finalReferenceNo} â€¢ ${materialName || serialNumber || dispatchStatus || "Sales workflow"}`,
+        entityType: "sale",
+        entityId: sale.id,
+        meta: {
+            serialNumber,
+            referenceNo: finalReferenceNo,
+            customerId,
+            shipToAddressKey,
+            materialName,
+            quantity,
+            piItems: parsedPiItems,
+            stateRegion,
+            piAttachmentName,
+            piAttachmentUrl,
+            expectedDispatchDate,
+            confirmedDispatchDate,
+            dispatchStatus,
+            courierDocketNo,
+            courierDocketAttachmentName,
+            courierDocketAttachmentUrl,
+            inventoryStatus,
+            forcePiApprovalStatus: sale.forcePiApprovalStatus,
+        },
+        audienceRoles: notificationAudience,
+        readBy: [],
+        createdBy: user.userId,
+        createdAt: new Date(),
+    });
     return (0, http_1.ok)(res, sale, 201);
 });
 exports.default = router;
