@@ -1,7 +1,9 @@
-import express, { type Request, type Response, type Router } from "express";
+import express, { type NextFunction, type Request, type Response, type Router } from "express";
+import multer from "multer";
 
 import { getCollections } from "../db/collections";
 import type { Complaint, Customer, ManufacturedProduct, Notification, Sale } from "../types";
+import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 import { recordTicketAssignmentLog, routeCustomerTicketByStateDistrict, refreshTicketLoadForAssignment } from "../services/ticketRouting";
@@ -26,6 +28,7 @@ const PORTAL_DISTRICT_L1_ENGINEER_MAPPING = [
   { state: "Rajasthan", district: "Jaipur", engineerEmail: "l1.prashant.singh@avavbusiness.com", engineerName: "Prashant Singh" },
 ] as const;
 const PORTAL_ACTIVE_STATUSES = ["Assigned to Engineer", "In Progress at Aurawatt", "Escalated to L2", "Escalated to L3", "Spare Requested", "Dispatch in Progress"];
+const MAX_CUSTOMER_PICTURE_BYTES = 5 * 1024 * 1024;
 const STATE_HINTS = [
   { state: "Uttar Pradesh", aliases: ["uttar pradesh", " up ", "lucknow", "kanpur", "varanasi", "prayagraj", "ghaziabad", "noida", "saharanpur", "mathura", "mirzapur"] },
   { state: "Delhi", aliases: ["delhi", "ncr"] },
@@ -59,6 +62,28 @@ const DISTRICT_HINTS = [
 
 function normalizeSerial(value: unknown): string {
   return String(value ?? "").trim();
+}
+
+const customerPortalPictureUpload = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: MAX_CUSTOMER_PICTURE_BYTES },
+  fileFilter: (_req, file, cb) => {
+    if (file.mimetype.startsWith("image/")) return cb(null, true);
+    return cb(new multer.MulterError("LIMIT_UNEXPECTED_FILE", "picture"));
+  },
+});
+
+function runCustomerPortalPictureUpload(req: Request, res: Response, next: NextFunction) {
+  customerPortalPictureUpload.single("picture")(req, res, (err: unknown) => {
+    if (!err) return next();
+    if (err instanceof multer.MulterError && err.code === "LIMIT_FILE_SIZE") {
+      return fail(res, "Picture size must be 5 MB or less", 413);
+    }
+    if (err instanceof multer.MulterError && err.code === "LIMIT_UNEXPECTED_FILE") {
+      return fail(res, "Only image files are allowed", 400);
+    }
+    return next(err);
+  });
 }
 
 function normalizePhone(value: unknown): string {
@@ -209,7 +234,22 @@ router.post("/login", async (req: Request, res: Response) => {
   const serialNumber = normalizeSerial(req.body.serialNumber);
   const mobile = normalizePhone(req.body.mobile);
 
-  if (!serialNumber || !mobile) return fail(res, "Inverter serial number and mobile number are required");
+  if (!mobile) return fail(res, "Mobile number is required");
+
+  if (!serialNumber) {
+    return ok(res, {
+      session: {
+        serialNumber: "",
+        productId: "",
+        productName: undefined,
+        productModel: undefined,
+        soldDate: undefined,
+        customerId: undefined,
+      },
+      customer: null,
+      activeComplaint: null,
+    });
+  }
 
   const manufactured = await findManufacturedBySerial(serialNumber);
   if (!manufactured) return fail(res, "Serial number not found", 404);
@@ -257,7 +297,7 @@ router.post("/login", async (req: Request, res: Response) => {
  * POST /api/customer-portal/complaints
  * Public customer complaint intake from mobile web / QR link.
  */
-router.post("/complaints", async (req: Request, res: Response) => {
+router.post("/complaints", runCustomerPortalPictureUpload, async (req: Request, res: Response) => {
   const c = await getCollections();
   const serialNumber = normalizeSerial(req.body.serialNumber);
   const mobile = normalizePhone(req.body.mobile);
@@ -267,8 +307,8 @@ router.post("/complaints", async (req: Request, res: Response) => {
   const state = String(req.body.state ?? "").trim();
   const district = String(req.body.district ?? "").trim();
 
-  if (!serialNumber || !mobile || !issueDescription) {
-    return fail(res, "Serial number, mobile number and issue description are required");
+  if (!mobile || !issueDescription) {
+    return fail(res, "Mobile number and issue description are required");
   }
   if (!state || !district) {
     return fail(res, "State and district are required");
@@ -280,21 +320,35 @@ router.post("/complaints", async (req: Request, res: Response) => {
     return fail(res, "Please enter a valid email address");
   }
 
-  const manufactured = await findManufacturedBySerial(serialNumber);
-  if (!manufactured) return fail(res, "Serial number not found", 404);
-  const invoiceDetails = await resolveInvoiceServiceDetails(serialNumber, manufactured);
-  const activeDuplicate = await c.complaints.findOne({
-    productSerialNoKey: normalizeComplaintSerialKey(serialNumber),
-    status: { $nin: [...CLOSED_COMPLAINT_STATUSES] },
-  });
+  const manufactured = serialNumber ? await findManufacturedBySerial(serialNumber) : null;
+  if (serialNumber && !manufactured) return fail(res, "Serial number not found", 404);
+  const invoiceDetails = serialNumber && manufactured ? await resolveInvoiceServiceDetails(serialNumber, manufactured) : null;
+  const activeDuplicate = serialNumber
+    ? await c.complaints.findOne({
+      productSerialNoKey: normalizeComplaintSerialKey(serialNumber),
+      status: { $nin: [...CLOSED_COMPLAINT_STATUSES] },
+    })
+    : null;
   if (activeDuplicate) {
     return fail(res, ACTIVE_COMPLAINT_DUPLICATE_MESSAGE, 409);
   }
 
-  const linkedCustomer = invoiceDetails.customer;
-  const siteLocation = String(req.body.siteLocation ?? invoiceDetails.invoiceAddress ?? linkedCustomer?.address ?? "").trim();
+  const linkedCustomer = invoiceDetails?.customer ?? null;
+  const siteLocation = String(req.body.siteLocation ?? invoiceDetails?.invoiceAddress ?? linkedCustomer?.address ?? "").trim();
 
   const now = new Date();
+  const customerReportedPictures = req.file
+    ? [
+        {
+          fileName: req.file.originalname,
+          fileType: req.file.mimetype || undefined,
+          fileSize: req.file.size,
+          ...(await uploadBufferToCloudinary(req.file, "complaints/customer-portal")),
+          uploadedAt: now,
+        },
+      ]
+    : undefined;
+
   const assignment = await assignPortalTicket({
     state,
     district,
@@ -303,20 +357,21 @@ router.post("/complaints", async (req: Request, res: Response) => {
     return fail(res, (assignment as { blockedMessage?: string }).blockedMessage as string, 400);
   }
   const assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
-  const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured.customerPhones);
+  const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured?.customerPhones);
   const complaint: Complaint = {
     id: generateId(),
     type: "Consumer",
-    productSerialNo: serialNumber,
-    productSerialNoKey: normalizeComplaintSerialKey(serialNumber),
-    customerId: linkedCustomer?.id ?? manufactured.customerId,
+    productSerialNo: serialNumber || undefined,
+    productSerialNoKey: serialNumber ? normalizeComplaintSerialKey(serialNumber) : undefined,
+    customerReportedPictures,
+    customerId: linkedCustomer?.id ?? manufactured?.customerId,
     customerName,
     customerPhone: mobile,
     customerPhones,
     customerEmail: customerEmail || undefined,
-    dateOfSale: manufactured.soldDate
+    dateOfSale: manufactured?.soldDate
       ? new Date(manufactured.soldDate)
-      : invoiceDetails.sale?.saleDate
+      : invoiceDetails?.sale?.saleDate
         ? new Date(invoiceDetails.sale.saleDate)
         : undefined,
     dateOfComplaint: now,
@@ -328,8 +383,8 @@ router.post("/complaints", async (req: Request, res: Response) => {
     district,
     region: mapPortalRegion(`${state} ${district} ${siteLocation}`).name,
     priority: derivePriority(issueDescription),
-    warrantyStatus: invoiceDetails.warrantyStatus,
-    productModel: invoiceDetails.productModel,
+    warrantyStatus: invoiceDetails?.warrantyStatus,
+    productModel: invoiceDetails?.productModel,
     assignmentStatus: assignmentDecision?.assignmentStatus,
     assignedEngineerId: assignmentDecision?.assignedEngineerId,
     assignedEngineerName: assignmentDecision?.assignedEngineerName,
@@ -351,10 +406,12 @@ router.post("/complaints", async (req: Request, res: Response) => {
   };
 
   await c.complaints.insertOne(complaint);
-  await c.manufactured.updateOne(
-    { serialNumber },
-    { $set: { customerPhones, updatedAt: now } }
-  );
+  if (serialNumber) {
+    await c.manufactured.updateOne(
+      { serialNumber },
+      { $set: { customerPhones, updatedAt: now } }
+    );
+  }
   if (assignmentDecision && complaint.assignedEngineerId) {
     await recordTicketAssignmentLog({
       ticketId: complaint.id,
@@ -420,7 +477,7 @@ router.post("/complaints", async (req: Request, res: Response) => {
   return ok(res, {
     id: complaint.id,
     status: complaint.status,
-    productSerialNo: complaint.productSerialNo,
+    productSerialNo: complaint.productSerialNo || "",
     dateOfComplaint: complaint.dateOfComplaint,
   }, 201);
 });

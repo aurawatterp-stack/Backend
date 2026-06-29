@@ -14,6 +14,7 @@ exports.listEngineerAssignmentOptions = listEngineerAssignmentOptions;
 exports.recomputeTicketLoadForEngineer = recomputeTicketLoadForEngineer;
 exports.rebuildTicketLoads = rebuildTicketLoads;
 exports.createOrUpdateEngineerAssignment = createOrUpdateEngineerAssignment;
+exports.createOrUpdateEngineerAssignments = createOrUpdateEngineerAssignments;
 exports.deleteEngineerAssignment = deleteEngineerAssignment;
 exports.listEngineerAssignmentAudit = listEngineerAssignmentAudit;
 exports.importEngineerAssignmentsFromWorkbook = importEngineerAssignmentsFromWorkbook;
@@ -21,6 +22,7 @@ const node_fs_1 = __importDefault(require("node:fs"));
 const node_os_1 = __importDefault(require("node:os"));
 const node_path_1 = __importDefault(require("node:path"));
 const collections_1 = require("../db/collections");
+const indiaGeography_1 = require("../data/indiaGeography");
 const engineerAssignmentSeed_1 = require("../data/engineerAssignmentSeed");
 const complaintRules_1 = require("../utils/complaintRules");
 const id_1 = require("../utils/id");
@@ -34,6 +36,9 @@ function slugify(value) {
     return normalizeKey(value)
         .replace(/[^a-z0-9]+/g, "-")
         .replace(/^-+|-+$/g, "");
+}
+function exactMatchRegex(value) {
+    return new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
 }
 function columnIndexFromRef(cellRef) {
     const letters = cellRef.replace(/\d+/g, "");
@@ -349,10 +354,20 @@ async function listEngineerAssignmentOptions() {
         c.engineerAssignments.find({}).sort({ state: 1, district: 1 }).toArray(),
         c.engineerMasters.find({}).sort({ role: 1, name: 1 }).toArray(),
     ]);
+    const geography = (0, indiaGeography_1.getIndiaGeography)();
     const visibleEngineers = masters.filter((row) => row.role !== "Backup" && !/backup/i.test(row.name));
+    const districtsByState = Object.fromEntries(geography.stateDistrictEntries.map((entry) => [entry.state, [...entry.districts]]));
+    for (const assignment of assignments) {
+        const stateDistricts = districtsByState[assignment.state] ?? [];
+        if (!stateDistricts.some((district) => normalizeKey(district) === normalizeKey(assignment.district))) {
+            stateDistricts.push(assignment.district);
+        }
+        districtsByState[assignment.state] = stateDistricts.sort((a, b) => a.localeCompare(b));
+    }
     return {
-        states: Array.from(new Set(assignments.map((row) => row.state))).sort((a, b) => a.localeCompare(b)),
-        districts: Array.from(new Set(assignments.map((row) => row.district))).sort((a, b) => a.localeCompare(b)),
+        states: Array.from(new Set([...geography.states, ...assignments.map((row) => row.state)])).sort((a, b) => a.localeCompare(b)),
+        districts: Array.from(new Set(Object.values(districtsByState).flat())).sort((a, b) => a.localeCompare(b)),
+        districtsByState,
         engineers: visibleEngineers.map((row) => ({ id: row.id, name: row.name, role: row.role, email: row.email ?? "", mobile: row.mobile ?? "" })),
     };
 }
@@ -401,7 +416,7 @@ async function rebuildTicketLoads() {
     const loads = await Promise.all(engineers.map((engineer) => recomputeTicketLoadForEngineer(engineer.id, engineer.name)));
     return loads;
 }
-async function createOrUpdateEngineerAssignment(input, actor) {
+async function upsertEngineerAssignment(input, actor) {
     const c = await (0, collections_1.getCollections)();
     const row = normalizeEngineerAssignmentRow({
         state: input.state,
@@ -411,8 +426,8 @@ async function createOrUpdateEngineerAssignment(input, actor) {
         l1BackupEngineerName: input.l1BackupEngineerName || input.l2EngineerName,
     });
     const previous = await c.engineerAssignments.findOne({
-        state: { $regex: `^${row.state.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
-        district: { $regex: `^${row.district.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+        state: exactMatchRegex(row.state),
+        district: exactMatchRegex(row.district),
     });
     const [l1, l2, backup] = await Promise.all([
         ensureEngineerMasterRecord(row.l1EngineerName, "L1"),
@@ -452,13 +467,34 @@ async function createOrUpdateEngineerAssignment(input, actor) {
         note: previous ? "Assignment updated from ERP module." : "Assignment created from ERP module.",
         createdAt: now,
     });
-    await rebuildTicketLoads();
     return {
         assignment: next,
         l1Engineer: l1,
         l2Engineer: l2,
         backupEngineer: backup,
         previous,
+    };
+}
+async function createOrUpdateEngineerAssignment(input, actor) {
+    const result = await upsertEngineerAssignment(input, actor);
+    await rebuildTicketLoads();
+    return result;
+}
+async function createOrUpdateEngineerAssignments(input, actor) {
+    const districts = Array.from(new Set(input.districts
+        .map((district) => normalizeText(district))
+        .filter(Boolean)));
+    if (!districts.length) {
+        throw new Error("At least one district is required");
+    }
+    const results = [];
+    for (const district of districts) {
+        results.push(await upsertEngineerAssignment({ ...input, district }, actor));
+    }
+    await rebuildTicketLoads();
+    return {
+        assignments: results.map((result) => result.assignment),
+        results,
     };
 }
 async function deleteEngineerAssignment(id, actor) {

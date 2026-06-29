@@ -9,6 +9,7 @@ import { authenticate, requireAnyPermission } from "../middleware/auth";
 import { fail, ok } from "../utils/http";
 import {
   createOrUpdateEngineerAssignment,
+  createOrUpdateEngineerAssignments,
   deleteEngineerAssignment,
   importEngineerAssignmentsFromWorkbook,
   listEngineerAssignmentAudit,
@@ -26,6 +27,14 @@ const upload = multer({
 
 function normalizeId(value: unknown) {
   return String(value ?? "").trim();
+}
+
+function normalizeDistrictList(value: unknown) {
+  if (Array.isArray(value)) {
+    return value.map((item) => normalizeId(item)).filter(Boolean);
+  }
+  const single = normalizeId(value);
+  return single ? [single] : [];
 }
 
 async function enrichAssignments(rows: Awaited<ReturnType<typeof listEngineerAssignments>>["data"]) {
@@ -85,13 +94,22 @@ router.get("/ticket-loads", authenticate, requireAnyPermission("roles:manage", "
 });
 
 router.post("/", authenticate, requireAnyPermission("roles:manage", "users:manage"), async (req: Request, res: Response) => {
-  const { state, district, l1EngineerName, l2EngineerName, l1BackupEngineerName } = req.body ?? {};
-  if (!state || !district || !l1EngineerName || !l2EngineerName) {
-    return fail(res, "state, district, l1EngineerName and l2EngineerName are required");
+  const { state, district, districts, l1EngineerName, l2EngineerName, l1BackupEngineerName } = req.body ?? {};
+  const districtList = normalizeDistrictList(districts).length ? normalizeDistrictList(districts) : normalizeDistrictList(district);
+  if (!state || !districtList.length || !l1EngineerName || !l2EngineerName) {
+    return fail(res, "state, district(s), l1EngineerName and l2EngineerName are required");
   }
   try {
-    const result = await createOrUpdateEngineerAssignment(
-      { state, district, l1EngineerName, l2EngineerName, l1BackupEngineerName },
+    if (districtList.length === 1) {
+      const result = await createOrUpdateEngineerAssignment(
+        { state, district: districtList[0], l1EngineerName, l2EngineerName, l1BackupEngineerName },
+        (req as any).user
+      );
+      return ok(res, result, 201);
+    }
+
+    const result = await createOrUpdateEngineerAssignments(
+      { state, districts: districtList, l1EngineerName, l2EngineerName, l1BackupEngineerName },
       (req as any).user
     );
     return ok(res, result, 201);

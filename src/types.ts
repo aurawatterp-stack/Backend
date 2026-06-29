@@ -560,6 +560,7 @@ export type Complaint = {
   priority?: ServicePriority;
   warrantyStatus?: "In Warranty" | "Out of Warranty" | "Unknown" | string;
   productModel?: string;
+  customerReportedPictures?: InspectionAttachment[];
   taxInvoiceNo?: string;
   taxInvoiceDate?: Date;
   assignmentStatus?: "Assigned" | "Waiting";

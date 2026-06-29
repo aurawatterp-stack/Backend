@@ -349,9 +349,12 @@ async function buildServiceAssignment(input) {
     const preferredName = normalizeText(input.preferredEngineerName).toLowerCase();
     const preferredEmail = normalizeText(input.preferredEngineerEmail).toLowerCase();
     const districtAssignment = input.state && input.district ? await (0, engineerAssignments_1.resolveAssignmentByStateDistrict)(String(input.state), String(input.district)) : null;
-    const preferredEngineer = (preferredId ? engineerStats.find((item) => item.id === preferredId) : undefined) ??
-        (preferredEmail ? engineerStats.find((item) => item.email.toLowerCase() === preferredEmail) : undefined) ??
-        (preferredName ? engineerStats.find((item) => item.name.toLowerCase() === preferredName) : undefined);
+    const allowPreferredOverride = Boolean(input.forceAssign) || !districtAssignment;
+    const preferredEngineer = allowPreferredOverride
+        ? ((preferredId ? engineerStats.find((item) => item.id === preferredId) : undefined) ??
+            (preferredEmail ? engineerStats.find((item) => item.email.toLowerCase() === preferredEmail) : undefined) ??
+            (preferredName ? engineerStats.find((item) => item.name.toLowerCase() === preferredName) : undefined))
+        : undefined;
     const districtPrimary = input.level === "L1"
         ? districtAssignment?.l1Engineer
         : input.level === "L2"
@@ -877,7 +880,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
             priority,
             l1Sla,
             forceAssign: Boolean(forceAssign),
-            preferredEngineerName: engineerName,
+            preferredEngineerName: forceAssign ? engineerName : undefined,
         })
         : undefined;
     if (assignment?.blockedMessage) {
@@ -1224,6 +1227,25 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     if ("spareParts" in req.body) {
         update.spareParts = normalizeSpareRequestParts(req.body.spareParts);
     }
+    if ("productSerialNo" in req.body) {
+        const requestedProductSerialNo = normalizeText(req.body.productSerialNo);
+        if (requestedProductSerialNo) {
+            const requestedSerialKey = (0, complaintRules_1.normalizeComplaintSerialKey)(requestedProductSerialNo);
+            const activeDuplicateFilter = {
+                id: { $ne: id },
+                productSerialNoKey: requestedSerialKey,
+                status: { $nin: [...complaintRules_1.CLOSED_COMPLAINT_STATUSES] },
+            };
+            const activeDuplicate = await c.complaints.findOne(activeDuplicateFilter);
+            if (activeDuplicate) {
+                return (0, http_1.fail)(res, complaintRules_1.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE, 409);
+            }
+            update.productSerialNo = requestedProductSerialNo;
+        }
+        else {
+            delete update.productSerialNo;
+        }
+    }
     if ((req.body.status === "In Progress at Aurawatt" || ("serviceStartedAt" in req.body && req.body.serviceStartedAt)) && !existing.serviceStartedAt) {
         update.serviceStartedAt = serverNow;
         if (siteVisitActive && !existing.siteVisitAcceptedAt) {
@@ -1263,6 +1285,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             priority: req.body.priority ?? existing.priority,
             l1Sla: existing.l1Sla,
             preferredEngineerName: req.body.reassignEngineerName ?? req.body.engineerName,
+            forceAssign: true,
         });
         if (assignment.blockedMessage) {
             return (0, http_1.fail)(res, assignment.blockedMessage, 400);
@@ -1327,7 +1350,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
                 priority: req.body.priority ?? existing.priority,
                 l1Sla: existing.l1Sla,
                 preferredEngineerId: req.body.preferredEngineerId,
-                preferredEngineerName: req.body.preferredEngineerName ?? req.body.engineerName,
+                preferredEngineerName: req.body.preferredEngineerName,
+                forceAssign: Boolean(req.body.forceAssign),
                 excludeComplaintId: existing.id,
             });
             if (assignment.blockedMessage) {
@@ -1499,11 +1523,12 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         }));
     }
     const isClosed = (0, complaintRules_1.isClosedComplaintStatus)(desiredStatus);
-    const nextSerialKey = isClosed ? undefined : (0, complaintRules_1.normalizeComplaintSerialKey)(existing.productSerialNo) || undefined;
+    const effectiveProductSerialNo = normalizeText(update.productSerialNo ?? existing.productSerialNo);
+    const nextSerialKey = isClosed ? undefined : (0, complaintRules_1.normalizeComplaintSerialKey)(effectiveProductSerialNo) || undefined;
     const nextStatus = String(update.status ?? existing.status);
     const nextReplacementSerial = normalizeText(update.replacementSerialNo ?? existing.replacementSerialNo);
-    if (nextStatus === "Dispatch in Progress" && existing.productSerialNo) {
-        const originalSerial = await c.serials.findOne({ serialNumber: existing.productSerialNo }, { projection: { id: 1 } });
+    if (nextStatus === "Dispatch in Progress" && effectiveProductSerialNo) {
+        const originalSerial = await c.serials.findOne({ serialNumber: effectiveProductSerialNo }, { projection: { id: 1 } });
         if (!originalSerial) {
             return (0, http_1.fail)(res, "Original serial not found for replacement claim", 404);
         }
@@ -1525,9 +1550,9 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         updateDoc.$unset = { productSerialNoKey: "" };
     }
     await c.complaints.updateOne({ id }, updateDoc);
-    if (nextStatus === "Dispatch in Progress" && existing.productSerialNo) {
+    if (nextStatus === "Dispatch in Progress" && effectiveProductSerialNo) {
         await (0, serialLifecycle_1.updateSerialStatus)(c, {
-            serialNumber: existing.productSerialNo,
+            serialNumber: effectiveProductSerialNo,
             status: "Replacement Claimed",
         });
         if (nextReplacementSerial) {

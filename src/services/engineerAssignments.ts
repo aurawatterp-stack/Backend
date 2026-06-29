@@ -4,12 +4,13 @@ import os from "node:os";
 import path from "node:path";
 
 import { getCollections } from "../db/collections";
+import { getIndiaGeography } from "../data/indiaGeography";
 import { SEED_ENGINEER_ASSIGNMENT_ROWS, SEED_ENGINEER_MASTER_ROWS, type SeedEngineerAssignment } from "../data/engineerAssignmentSeed";
 import type { AuthUser } from "../types";
 import { ACTIVE_TICKET_STATUSES, LOBBY_TICKET_STATUSES } from "../utils/complaintRules";
 import { generateId } from "../utils/id";
 
-export type EngineerRole = "L1" | "L2" | "L3";
+export type EngineerRole = "L1" | "L2" | "L3" | "Backup";
 
 export type EngineerMasterRecord = {
   id: string;
@@ -89,6 +90,26 @@ function slugify(value: string) {
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-+|-+$/g, "");
 }
+
+function exactMatchRegex(value: string) {
+  return new RegExp(`^${value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, "i");
+}
+
+type EngineerAssignmentInput = {
+  state: string;
+  district: string;
+  l1EngineerName: string;
+  l2EngineerName: string;
+  l1BackupEngineerName?: string;
+};
+
+type EngineerAssignmentMutationResult = {
+  assignment: EngineerAssignmentRecord;
+  l1Engineer: EngineerMasterRecord | null;
+  l2Engineer: EngineerMasterRecord | null;
+  backupEngineer: EngineerMasterRecord | null;
+  previous?: EngineerAssignmentRecord | null;
+};
 
 function columnIndexFromRef(cellRef: string) {
   const letters = cellRef.replace(/\d+/g, "");
@@ -427,10 +448,22 @@ export async function listEngineerAssignmentOptions() {
     c.engineerAssignments.find({}).sort({ state: 1, district: 1 }).toArray(),
     c.engineerMasters.find({}).sort({ role: 1, name: 1 }).toArray(),
   ]);
+  const geography = getIndiaGeography();
   const visibleEngineers = masters.filter((row) => row.role !== "Backup" && !/backup/i.test(row.name));
+  const districtsByState: Record<string, string[]> = Object.fromEntries(
+    geography.stateDistrictEntries.map((entry) => [entry.state, [...entry.districts]])
+  );
+  for (const assignment of assignments) {
+    const stateDistricts = districtsByState[assignment.state] ?? [];
+    if (!stateDistricts.some((district) => normalizeKey(district) === normalizeKey(assignment.district))) {
+      stateDistricts.push(assignment.district);
+    }
+    districtsByState[assignment.state] = stateDistricts.sort((a, b) => a.localeCompare(b));
+  }
   return {
-    states: Array.from(new Set(assignments.map((row) => row.state))).sort((a, b) => a.localeCompare(b)),
-    districts: Array.from(new Set(assignments.map((row) => row.district))).sort((a, b) => a.localeCompare(b)),
+    states: Array.from(new Set([...geography.states, ...assignments.map((row) => row.state)])).sort((a, b) => a.localeCompare(b)),
+    districts: Array.from(new Set(Object.values(districtsByState).flat())).sort((a, b) => a.localeCompare(b)),
+    districtsByState,
     engineers: visibleEngineers.map((row) => ({ id: row.id, name: row.name, role: row.role, email: row.email ?? "", mobile: row.mobile ?? "" })),
   };
 }
@@ -487,13 +520,7 @@ export async function rebuildTicketLoads() {
   return loads;
 }
 
-export async function createOrUpdateEngineerAssignment(input: {
-  state: string;
-  district: string;
-  l1EngineerName: string;
-  l2EngineerName: string;
-  l1BackupEngineerName?: string;
-}, actor?: AuthUser) {
+async function upsertEngineerAssignment(input: EngineerAssignmentInput, actor?: AuthUser): Promise<EngineerAssignmentMutationResult> {
   const c = await getCollections();
   const row = normalizeEngineerAssignmentRow({
     state: input.state,
@@ -503,8 +530,8 @@ export async function createOrUpdateEngineerAssignment(input: {
     l1BackupEngineerName: input.l1BackupEngineerName || input.l2EngineerName,
   });
   const previous = await c.engineerAssignments.findOne({
-    state: { $regex: `^${row.state.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
-    district: { $regex: `^${row.district.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}$`, $options: "i" },
+    state: exactMatchRegex(row.state),
+    district: exactMatchRegex(row.district),
   });
 
   const [l1, l2, backup] = await Promise.all([
@@ -548,13 +575,42 @@ export async function createOrUpdateEngineerAssignment(input: {
     createdAt: now,
   });
 
-  await rebuildTicketLoads();
   return {
     assignment: next,
     l1Engineer: l1,
     l2Engineer: l2,
     backupEngineer: backup,
     previous,
+  };
+}
+
+export async function createOrUpdateEngineerAssignment(input: EngineerAssignmentInput, actor?: AuthUser) {
+  const result = await upsertEngineerAssignment(input, actor);
+  await rebuildTicketLoads();
+  return result;
+}
+
+export async function createOrUpdateEngineerAssignments(input: Omit<EngineerAssignmentInput, "district"> & { districts: string[] }, actor?: AuthUser) {
+  const districts = Array.from(
+    new Set(
+      input.districts
+        .map((district) => normalizeText(district))
+        .filter(Boolean)
+    )
+  );
+  if (!districts.length) {
+    throw new Error("At least one district is required");
+  }
+
+  const results: EngineerAssignmentMutationResult[] = [];
+  for (const district of districts) {
+    results.push(await upsertEngineerAssignment({ ...input, district }, actor));
+  }
+
+  await rebuildTicketLoads();
+  return {
+    assignments: results.map((result) => result.assignment),
+    results,
   };
 }
 

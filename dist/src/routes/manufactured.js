@@ -71,6 +71,18 @@ function replacementLabel(complaint) {
         complaint.replacementModelName || complaint.replacementProductNo,
     ].filter(Boolean).join(" ") || "Replacement inverter";
 }
+async function resolveComplaintReplacementSeries(c, complaint) {
+    const explicitSeries = normalizeText(complaint.replacementSeriesName || complaint.replacementProductName);
+    if (explicitSeries)
+        return explicitSeries;
+    const explicitModel = normalizeText(complaint.replacementModelName || complaint.replacementProductNo || complaint.productModel);
+    if (!explicitModel)
+        return "";
+    const product = await c.products.findOne({
+        $or: [{ id: explicitModel }, { model: explicitModel }],
+    });
+    return product?.series ?? "";
+}
 async function insertDispatchApprovalNotification(c, complaint, user, title, body, meta) {
     const notification = {
         id: (0, id_1.generateId)(),
@@ -338,6 +350,16 @@ router.post("/approval-requests/:id/approve", auth_1.authenticate, (0, auth_1.re
             return (0, http_1.fail)(res, "Replacement serial not found in Manufactured Products", 404);
         if (manufactured.status !== "In Stock")
             return (0, http_1.fail)(res, "Replacement serial must be In Stock before approval", 400);
+        const requestedSeries = await resolveComplaintReplacementSeries(c, complaint);
+        if (requestedSeries) {
+            const stockProduct = await c.products.findOne({
+                $or: [{ id: manufactured.productId }, { model: manufactured.productId }],
+            });
+            const stockSeries = normalizeText(stockProduct?.series);
+            if (!stockSeries || stockSeries !== requestedSeries) {
+                return (0, http_1.fail)(res, `Replacement serial must belong to the requested series (${requestedSeries})`, 400);
+            }
+        }
         await c.manufactured.updateOne({ id: manufactured.id }, {
             $set: {
                 status: "Sold",
