@@ -1214,6 +1214,10 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         "closedByRole",
         "closedAt",
         "status",
+        "faultyReturnStatus",
+        "faultyReturnNotes",
+        "faultyReturnType",
+        "faultyReturnItemId",
     ];
     const serverNow = new Date();
     const update = { updatedAt: serverNow, l1InspectionValid };
@@ -1243,7 +1247,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             update.productSerialNo = requestedProductSerialNo;
         }
         else {
-            delete update.productSerialNo;
+            update.productSerialNo = "";
         }
     }
     if ((req.body.status === "In Progress at Aurawatt" || ("serviceStartedAt" in req.body && req.body.serviceStartedAt)) && !existing.serviceStartedAt) {
@@ -1537,6 +1541,23 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             if (!replacementSerial) {
                 return (0, http_1.fail)(res, "Replacement serial not found in serial pool", 404);
             }
+        }
+    }
+    if (update.replacementApprovalStatus === "Pending" && existing.replacementApprovalStatus !== "Pending") {
+        update.faultyReturnStatus = "Pending";
+        update.faultyReturnType = "Inverter";
+        if (existing.productSerialNo) {
+            update.faultyReturnItemId = existing.productSerialNo;
+        }
+    }
+    if (update.spareRequestStatus === "Requested" && existing.spareRequestStatus !== "Requested") {
+        update.faultyReturnStatus = "Pending";
+        update.faultyReturnType = "Spare Part";
+        if (update.spareParts && Array.isArray(update.spareParts) && update.spareParts.length > 0) {
+            update.faultyReturnItemId = update.spareParts[0].rawMaterialId;
+        }
+        else if (existing.spareParts && existing.spareParts.length > 0) {
+            update.faultyReturnItemId = existing.spareParts[0].rawMaterialId;
         }
     }
     const setDoc = { ...update };

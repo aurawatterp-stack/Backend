@@ -1460,6 +1460,10 @@ router.put(
       "closedByRole",
       "closedAt",
       "status",
+      "faultyReturnStatus",
+      "faultyReturnNotes",
+      "faultyReturnType",
+      "faultyReturnItemId",
     ] as const;
 
     const serverNow = new Date();
@@ -1488,9 +1492,10 @@ router.put(
         }
         update.productSerialNo = requestedProductSerialNo;
       } else {
-        delete update.productSerialNo;
+        update.productSerialNo = "";
       }
     }
+
     if ((req.body.status === "In Progress at Aurawatt" || ("serviceStartedAt" in req.body && req.body.serviceStartedAt)) && !existing.serviceStartedAt) {
       update.serviceStartedAt = serverNow;
       if (siteVisitActive && !existing.siteVisitAcceptedAt) {
@@ -1788,6 +1793,24 @@ router.put(
         }
       }
     }
+    if (update.replacementApprovalStatus === "Pending" && existing.replacementApprovalStatus !== "Pending") {
+      update.faultyReturnStatus = "Pending";
+      update.faultyReturnType = "Inverter";
+      if (existing.productSerialNo) {
+        update.faultyReturnItemId = existing.productSerialNo;
+      }
+    }
+
+    if (update.spareRequestStatus === "Requested" && existing.spareRequestStatus !== "Requested") {
+      update.faultyReturnStatus = "Pending";
+      update.faultyReturnType = "Spare Part";
+      if (update.spareParts && Array.isArray(update.spareParts) && update.spareParts.length > 0) {
+        update.faultyReturnItemId = (update.spareParts as any)[0].rawMaterialId;
+      } else if (existing.spareParts && existing.spareParts.length > 0) {
+        update.faultyReturnItemId = existing.spareParts[0].rawMaterialId;
+      }
+    }
+
     const setDoc: Record<string, unknown> = { ...update };
     if (nextSerialKey) {
       setDoc.productSerialNoKey = nextSerialKey;

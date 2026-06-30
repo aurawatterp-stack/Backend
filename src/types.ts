@@ -311,11 +311,13 @@ export type RawMaterial = {
   returnedAt?: Date;
   returnedBy?: string;
   returnedByName?: string;
+  faultyQuantity?: number;
+  repairedQuantity?: number;
   createdAt: Date;
   updatedAt: Date;
 };
 
-export type ManufacturedStatus = "In Stock" | "Sold" | "Returned";
+export type ManufacturedStatus = "In Stock" | "Sold" | "Returned" | "Failed" | "Faulty" | "Repaired";
 export type PaymentStatus = "N/A" | "Pending" | "Verified";
 export type ManufacturedProduct = {
   id: string;
@@ -608,6 +610,10 @@ export type Complaint = {
   replacementProductName?: string;
   replacementProductNo?: string;
   replacementRequestSerialNo?: string;
+  faultyReturnStatus?: "Not Required" | "Pending" | "Received";
+  faultyReturnNotes?: string;
+  faultyReturnType?: "Inverter" | "Spare Part";
+  faultyReturnItemId?: string;
   replacementSerialNo?: string;
   replacementEngineerId?: string;
   replacementEngineerName?: string;
