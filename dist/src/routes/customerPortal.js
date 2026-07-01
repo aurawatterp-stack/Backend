@@ -218,6 +218,10 @@ router.post("/login", async (req, res) => {
                 soldDate: undefined,
                 customerId: undefined,
             },
+            product: {
+                name: undefined,
+                model: undefined,
+            },
             customer: null,
             activeComplaint: null,
         });
@@ -311,20 +315,25 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req, res) => {
             },
         ]
         : undefined;
-    const assignment = await assignPortalTicket({
-        state,
-        district,
-    });
-    if (assignment.blockedMessage) {
-        return (0, http_1.fail)(res, assignment.blockedMessage, 400);
+    let assignmentDecision = null;
+    try {
+        const assignment = await assignPortalTicket({ state, district });
+        assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
     }
-    const assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
+    catch (err) {
+        console.warn("Customer portal assignment fallback:", err instanceof Error ? err.message : String(err));
+        assignmentDecision = null;
+    }
     const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured?.customerPhones);
     const complaint = {
         id: (0, id_1.generateId)(),
         type: "Consumer",
-        productSerialNo: serialNumber || undefined,
-        productSerialNoKey: serialNumber ? (0, complaintRules_1.normalizeComplaintSerialKey)(serialNumber) : undefined,
+        ...(serialNumber
+            ? {
+                productSerialNo: serialNumber,
+                productSerialNoKey: (0, complaintRules_1.normalizeComplaintSerialKey)(serialNumber),
+            }
+            : {}),
         customerReportedPictures,
         customerId: linkedCustomer?.id ?? manufactured?.customerId,
         customerName,
@@ -371,32 +380,42 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req, res) => {
         await c.manufactured.updateOne({ serialNumber }, { $set: { customerPhones, updatedAt: now } });
     }
     if (assignmentDecision && complaint.assignedEngineerId) {
-        await (0, ticketRouting_1.recordTicketAssignmentLog)({
-            ticketId: complaint.id,
-            customerName: complaint.customerName ?? customerName,
-            mobileNumber: complaint.customerPhone ?? mobile,
-            email: complaint.customerEmail,
-            state: complaint.state ?? state,
-            district: complaint.district ?? district,
-            assignedEngineerId: complaint.assignedEngineerId ?? "",
-            assignedEngineerName: complaint.assignedEngineerName ?? "",
-            assignmentType: assignmentDecision.assignmentType,
-            assignmentReason: assignmentDecision.assignmentReason,
-            activeTicketCountAtAssignment: assignmentDecision.activeTicketCountAtAssignment,
-            lobbyTicketCountAtAssignment: assignmentDecision.lobbyTicketCountAtAssignment,
-            totalTicketCountAtAssignment: assignmentDecision.totalTicketCountAtAssignment,
-            assignmentStatus: assignmentDecision.assignmentStatus,
-            status: assignmentDecision.status,
-            createdBy: "customer-portal",
-            lastUpdatedBy: "customer-portal",
-            backupEngineerName: assignmentDecision.backupEngineerName,
-            slaStartedAt: assignmentDecision.slaStartedAt,
-            slaDueAt: assignmentDecision.slaDueAt,
-            slaPaused: assignmentDecision.slaPaused,
-        });
+        try {
+            await (0, ticketRouting_1.recordTicketAssignmentLog)({
+                ticketId: complaint.id,
+                customerName: complaint.customerName ?? customerName,
+                mobileNumber: complaint.customerPhone ?? mobile,
+                email: complaint.customerEmail,
+                state: complaint.state ?? state,
+                district: complaint.district ?? district,
+                assignedEngineerId: complaint.assignedEngineerId ?? "",
+                assignedEngineerName: complaint.assignedEngineerName ?? "",
+                assignmentType: assignmentDecision.assignmentType,
+                assignmentReason: assignmentDecision.assignmentReason,
+                activeTicketCountAtAssignment: assignmentDecision.activeTicketCountAtAssignment,
+                lobbyTicketCountAtAssignment: assignmentDecision.lobbyTicketCountAtAssignment,
+                totalTicketCountAtAssignment: assignmentDecision.totalTicketCountAtAssignment,
+                assignmentStatus: assignmentDecision.assignmentStatus,
+                status: assignmentDecision.status,
+                createdBy: "customer-portal",
+                lastUpdatedBy: "customer-portal",
+                backupEngineerName: assignmentDecision.backupEngineerName,
+                slaStartedAt: assignmentDecision.slaStartedAt,
+                slaDueAt: assignmentDecision.slaDueAt,
+                slaPaused: assignmentDecision.slaPaused,
+            });
+        }
+        catch (err) {
+            console.warn("Failed to record customer portal assignment log:", err instanceof Error ? err.message : String(err));
+        }
     }
     if (complaint.assignedEngineerId) {
-        await (0, ticketRouting_1.refreshTicketLoadForAssignment)(complaint.assignedEngineerId, complaint.assignedEngineerName);
+        try {
+            await (0, ticketRouting_1.refreshTicketLoadForAssignment)(complaint.assignedEngineerId, complaint.assignedEngineerName);
+        }
+        catch (err) {
+            console.warn("Failed to refresh assigned engineer load:", err instanceof Error ? err.message : String(err));
+        }
     }
     try {
         const notification = {

@@ -246,6 +246,10 @@ router.post("/login", async (req: Request, res: Response) => {
         soldDate: undefined,
         customerId: undefined,
       },
+      product: {
+        name: undefined,
+        model: undefined,
+      },
       customer: null,
       activeComplaint: null,
     });
@@ -349,20 +353,24 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req: Request, 
       ]
     : undefined;
 
-  const assignment = await assignPortalTicket({
-    state,
-    district,
-  });
-  if ((assignment as { blockedMessage?: string }).blockedMessage) {
-    return fail(res, (assignment as { blockedMessage?: string }).blockedMessage as string, 400);
+  let assignmentDecision: Awaited<ReturnType<typeof assignPortalTicket>> | null = null;
+  try {
+    const assignment = await assignPortalTicket({ state, district });
+    assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
+  } catch (err) {
+    console.warn("Customer portal assignment fallback:", err instanceof Error ? err.message : String(err));
+    assignmentDecision = null;
   }
-  const assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
   const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured?.customerPhones);
   const complaint: Complaint = {
     id: generateId(),
     type: "Consumer",
-    productSerialNo: serialNumber || undefined,
-    productSerialNoKey: serialNumber ? normalizeComplaintSerialKey(serialNumber) : undefined,
+    ...(serialNumber
+      ? {
+          productSerialNo: serialNumber,
+          productSerialNoKey: normalizeComplaintSerialKey(serialNumber),
+        }
+      : {}),
     customerReportedPictures,
     customerId: linkedCustomer?.id ?? manufactured?.customerId,
     customerName,
@@ -413,32 +421,40 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req: Request, 
     );
   }
   if (assignmentDecision && complaint.assignedEngineerId) {
-    await recordTicketAssignmentLog({
-      ticketId: complaint.id,
-      customerName: complaint.customerName ?? customerName,
-      mobileNumber: complaint.customerPhone ?? mobile,
-      email: complaint.customerEmail,
-      state: complaint.state ?? state,
-      district: complaint.district ?? district,
-      assignedEngineerId: complaint.assignedEngineerId ?? "",
-      assignedEngineerName: complaint.assignedEngineerName ?? "",
-      assignmentType: assignmentDecision.assignmentType,
-      assignmentReason: assignmentDecision.assignmentReason,
-      activeTicketCountAtAssignment: assignmentDecision.activeTicketCountAtAssignment,
-      lobbyTicketCountAtAssignment: assignmentDecision.lobbyTicketCountAtAssignment,
-      totalTicketCountAtAssignment: assignmentDecision.totalTicketCountAtAssignment,
-      assignmentStatus: assignmentDecision.assignmentStatus,
-      status: assignmentDecision.status,
-      createdBy: "customer-portal",
-      lastUpdatedBy: "customer-portal",
-      backupEngineerName: assignmentDecision.backupEngineerName,
-      slaStartedAt: assignmentDecision.slaStartedAt,
-      slaDueAt: assignmentDecision.slaDueAt,
-      slaPaused: assignmentDecision.slaPaused,
-    });
+    try {
+      await recordTicketAssignmentLog({
+        ticketId: complaint.id,
+        customerName: complaint.customerName ?? customerName,
+        mobileNumber: complaint.customerPhone ?? mobile,
+        email: complaint.customerEmail,
+        state: complaint.state ?? state,
+        district: complaint.district ?? district,
+        assignedEngineerId: complaint.assignedEngineerId ?? "",
+        assignedEngineerName: complaint.assignedEngineerName ?? "",
+        assignmentType: assignmentDecision.assignmentType,
+        assignmentReason: assignmentDecision.assignmentReason,
+        activeTicketCountAtAssignment: assignmentDecision.activeTicketCountAtAssignment,
+        lobbyTicketCountAtAssignment: assignmentDecision.lobbyTicketCountAtAssignment,
+        totalTicketCountAtAssignment: assignmentDecision.totalTicketCountAtAssignment,
+        assignmentStatus: assignmentDecision.assignmentStatus,
+        status: assignmentDecision.status,
+        createdBy: "customer-portal",
+        lastUpdatedBy: "customer-portal",
+        backupEngineerName: assignmentDecision.backupEngineerName,
+        slaStartedAt: assignmentDecision.slaStartedAt,
+        slaDueAt: assignmentDecision.slaDueAt,
+        slaPaused: assignmentDecision.slaPaused,
+      });
+    } catch (err) {
+      console.warn("Failed to record customer portal assignment log:", err instanceof Error ? err.message : String(err));
+    }
   }
   if (complaint.assignedEngineerId) {
-    await refreshTicketLoadForAssignment(complaint.assignedEngineerId, complaint.assignedEngineerName);
+    try {
+      await refreshTicketLoadForAssignment(complaint.assignedEngineerId, complaint.assignedEngineerName);
+    } catch (err) {
+      console.warn("Failed to refresh assigned engineer load:", err instanceof Error ? err.message : String(err));
+    }
   }
 
   try {

@@ -174,7 +174,7 @@ async function initDatabase() {
     });
     await repairComplaintSerialKeyIndex(c.complaints);
     try {
-        await ensureSparseUniqueIndex(c.complaints, { productSerialNoKey: 1 });
+        await ensurePartialUniqueStringIndex(c.complaints, { productSerialNoKey: 1 });
     }
     catch (err) {
         if (!isDuplicateKeyError(err))
@@ -182,7 +182,7 @@ async function initDatabase() {
         console.warn("DB init: retrying complaint serial index build after repairing duplicate keys.");
         try {
             await repairComplaintSerialKeyIndex(c.complaints);
-            await ensureSparseUniqueIndex(c.complaints, { productSerialNoKey: 1 });
+            await ensurePartialUniqueStringIndex(c.complaints, { productSerialNoKey: 1 });
         }
         catch (retryErr) {
             if (!isDuplicateKeyError(retryErr))

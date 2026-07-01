@@ -561,6 +561,7 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
         return (0, http_1.fail)(res, "PI record not found", 404);
     const user = req.user;
     const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered" || dispatchStatus === "Dispatched";
+    const isLegacyDispatchSubmission = !isNewPiWorkflow(sale) && Boolean(sale.piAttachmentName || sale.piAttachmentUrl) && !sale.accountsRequestAt && !sale.accountsSharedAt;
     if (isNewPiWorkflow(sale)) {
         if (forwardToAccounts) {
             if (sale.piWorkflowStatus !== PI_STATUS_SUBMITTED) {
@@ -586,6 +587,9 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
         if (dispatchStatus !== undefined && dispatchStatus !== "Ready" && !isDeliveryStatus) {
             return (0, http_1.fail)(res, "New PI workflow supports only vehicle no. sharing or final dispatch actions from Dispatch Team");
         }
+    }
+    else if (forwardToAccounts && !isLegacyDispatchSubmission) {
+        return (0, http_1.fail)(res, "PI attachment is required before forwarding to Accounts");
     }
     const update = {};
     const normalizedSerialNumber = normalizeSerialNumber(serialNumber);
@@ -655,6 +659,16 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
         update.accountsRequestBy = user.userId;
         event = workflowEvent(sale, user, "Forward to Accounts", PI_STATUS_SUBMITTED, "Dispatch", "Dispatch Team forwarded the request to Accounts for payment verification");
     }
+    if (!isNewPiWorkflow(sale) && forwardToAccounts) {
+        const now = new Date();
+        update.piWorkflowVersion = PI_WORKFLOW_VERSION;
+        update.piWorkflowStatus = PI_STATUS_SUBMITTED;
+        update.paymentStatus = "Pending";
+        update.dispatchStatus = "Planned";
+        update.accountsRequestAt = now;
+        update.accountsRequestBy = user.userId;
+        event = workflowEvent(sale, user, "Forward to Accounts", PI_STATUS_SUBMITTED, "Dispatch", "Dispatch Team forwarded the request to Accounts for payment verification");
+    }
     if (isNewPiWorkflow(sale) && dispatchStatus === "Ready") {
         const now = new Date();
         update.dispatchStatus = "Ready";
@@ -709,6 +723,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
     if (isWorkflowEntry && (!(materialName || parsedPiItems?.length) || !(quantity || parsedPiItems?.length) || !stateRegion)) {
         return (0, http_1.fail)(res, "PI item, quantity and stateRegion are required");
     }
+    const isDispatchWorkflowEntry = isDispatchEntry && Boolean(piAttachmentName || piAttachmentUrl) && !isWorkflowEntry;
     if (isRegisteredCustomer) {
         const customer = await c.customers.findOne({ id: customerId }, { projection: { id: 1 } });
         if (!customer)
@@ -774,6 +789,25 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
                 byRole: user.role,
                 at: sale.createdAt,
                 note: "PI request submitted to Dispatch Team for review and forwarding",
+            },
+        ];
+    }
+    if (isDispatchWorkflowEntry) {
+        sale.paymentStatus = "Pending";
+        sale.dispatchStatus = "Planned";
+        sale.piWorkflowVersion = PI_WORKFLOW_VERSION;
+        sale.piWorkflowStatus = PI_STATUS_SUBMITTED;
+        sale.piWorkflowHistory = [
+            {
+                id: (0, id_1.generateId)(),
+                action: "Submit PI Request",
+                toStatus: PI_STATUS_SUBMITTED,
+                department: "Sales",
+                by: user.userId,
+                byName: user.name,
+                byRole: user.role,
+                at: sale.createdAt,
+                note: "PI attachment submitted to Dispatch Team for review and forwarding",
             },
         ];
     }
@@ -856,15 +890,15 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:en
         ? inventoryStatus === "Insufficient"
             ? "Stock Approval Request"
             : "PI Approval Request"
-        : isWorkflowEntry
+        : (isWorkflowEntry || isDispatchWorkflowEntry)
             ? "New Sales Workflow PI"
             : isDispatchEntry
                 ? "Dispatch Planning Updated"
                 : "New Sale Recorded";
     const notificationAudience = sale.forcePiApprovalStatus === "Pending"
         ? ["Admin"]
-        : isWorkflowEntry
-            ? ["Admin", "Accounts", "Accounts Team"]
+        : (isWorkflowEntry || isDispatchWorkflowEntry)
+            ? ["Admin", "Dispatch"]
             : ["Admin", "Sales", "Inventory"];
     await insertNotification(c, {
         id: (0, id_1.generateId)(),

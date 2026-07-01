@@ -656,6 +656,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   if (!sale) return fail(res, "PI record not found", 404);
   const user = (req as any).user as AuthUser;
   const isDeliveryStatus = dispatchStatus === "Final Dispatch" || dispatchStatus === "Delivered" || dispatchStatus === "Dispatched";
+  const isLegacyDispatchSubmission = !isNewPiWorkflow(sale) && Boolean(sale.piAttachmentName || sale.piAttachmentUrl) && !sale.accountsRequestAt && !sale.accountsSharedAt;
 
   if (isNewPiWorkflow(sale)) {
     if (forwardToAccounts) {
@@ -683,6 +684,8 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     if (dispatchStatus !== undefined && dispatchStatus !== "Ready" && !isDeliveryStatus) {
       return fail(res, "New PI workflow supports only vehicle no. sharing or final dispatch actions from Dispatch Team");
     }
+  } else if (forwardToAccounts && !isLegacyDispatchSubmission) {
+    return fail(res, "PI attachment is required before forwarding to Accounts");
   }
 
   const update: Partial<Sale> = {};
@@ -752,6 +755,23 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   let event: ReturnType<typeof workflowEvent> | undefined;
   if (isNewPiWorkflow(sale) && forwardToAccounts) {
     update.accountsRequestAt = new Date();
+    update.accountsRequestBy = user.userId;
+    event = workflowEvent(
+      sale,
+      user,
+      "Forward to Accounts",
+      PI_STATUS_SUBMITTED,
+      "Dispatch",
+      "Dispatch Team forwarded the request to Accounts for payment verification"
+    );
+  }
+  if (!isNewPiWorkflow(sale) && forwardToAccounts) {
+    const now = new Date();
+    update.piWorkflowVersion = PI_WORKFLOW_VERSION;
+    update.piWorkflowStatus = PI_STATUS_SUBMITTED;
+    update.paymentStatus = "Pending";
+    update.dispatchStatus = "Planned";
+    update.accountsRequestAt = now;
     update.accountsRequestBy = user.userId;
     event = workflowEvent(
       sale,
@@ -860,6 +880,7 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
   if (isWorkflowEntry && (!(materialName || parsedPiItems?.length) || !(quantity || parsedPiItems?.length) || !stateRegion)) {
     return fail(res, "PI item, quantity and stateRegion are required");
   }
+  const isDispatchWorkflowEntry = isDispatchEntry && Boolean(piAttachmentName || piAttachmentUrl) && !isWorkflowEntry;
 
   if (isRegisteredCustomer) {
     const customer = await c.customers.findOne({ id: customerId }, { projection: { id: 1 } });
@@ -933,6 +954,25 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
       },
     ];
   }
+  if (isDispatchWorkflowEntry) {
+    sale.paymentStatus = "Pending";
+    sale.dispatchStatus = "Planned";
+    sale.piWorkflowVersion = PI_WORKFLOW_VERSION;
+    sale.piWorkflowStatus = PI_STATUS_SUBMITTED;
+    sale.piWorkflowHistory = [
+      {
+        id: generateId(),
+        action: "Submit PI Request",
+        toStatus: PI_STATUS_SUBMITTED,
+        department: "Sales",
+        by: user.userId,
+        byName: user.name,
+        byRole: user.role,
+        at: sale.createdAt,
+        note: "PI attachment submitted to Dispatch Team for review and forwarding",
+      },
+    ];
+  }
   if (serialNumber) sale.serialNumber = String(serialNumber);
   if (unregisteredCustomerName) sale.unregisteredCustomerName = String(unregisteredCustomerName);
   if (unregisteredCustomerAddress) sale.unregisteredCustomerAddress = String(unregisteredCustomerAddress);
@@ -987,15 +1027,15 @@ router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: 
     ? inventoryStatus === "Insufficient"
       ? "Stock Approval Request"
       : "PI Approval Request"
-    : isWorkflowEntry
+    : (isWorkflowEntry || isDispatchWorkflowEntry)
       ? "New Sales Workflow PI"
       : isDispatchEntry
         ? "Dispatch Planning Updated"
         : "New Sale Recorded";
   const notificationAudience = sale.forcePiApprovalStatus === "Pending"
     ? ["Admin"]
-    : isWorkflowEntry
-      ? ["Admin", "Accounts", "Accounts Team"]
+    : (isWorkflowEntry || isDispatchWorkflowEntry)
+      ? ["Admin", "Dispatch"]
       : ["Admin", "Sales", "Inventory"];
   await insertNotification(c, {
     id: generateId(),
