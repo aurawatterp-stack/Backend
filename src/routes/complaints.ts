@@ -501,9 +501,9 @@ async function buildServiceAssignment(input: {
   }
 
   if (mappedPrimary && !preferredEngineer && input.level === "L2") {
-    const primaryAssignment = assignmentForEngineer(engineer);
+    const primaryAssignment = assignmentForEngineer(mappedPrimary);
     if (!primaryAssignment) {
-      return { blockedMessage: ENGINEER_CAPACITY_MESSAGE };
+      return { blockedMessage: `Mapped L2 engineer ${districtPrimary?.name || "unknown"} is unavailable for ${regionConfig.name}. Please verify the complaint location or engineer mapping.` };
     }
     return {
       region: regionConfig.name,
@@ -511,6 +511,12 @@ async function buildServiceAssignment(input: {
       escalationLevel: input.level,
       backupEngineerName: mappedBackup?.name ?? districtBackup?.name,
       ...primaryAssignment,
+    };
+  }
+
+  if (!preferredEngineer && input.level === "L2") {
+    return {
+      blockedMessage: `No L2 mapping found for ${regionConfig.name}. Please verify the complaint location before escalating.`,
     };
   }
 
@@ -1055,8 +1061,8 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     return fail(res, "type, dateOfComplaint, issueDescription are required");
   }
   if (String(type).toLowerCase() === "consumer") {
-    if (!productSerialNo || !customerName || !mobileNumber || !complaintState || !complaintDistrict) {
-      return fail(res, "Serial number, customer name, mobile number, state, district and complaint description are required");
+    if (!customerName || !mobileNumber || !complaintState || !complaintDistrict) {
+      return fail(res, "Customer name, mobile number, state and district are required");
     }
     if (customerEmail && !isValidEmailAddress(customerEmail)) {
       return fail(res, "Please enter a valid email address");
@@ -1593,6 +1599,8 @@ router.put(
           issueDescription: req.body.issueDescription ?? existing.issueDescription,
           siteLocation: req.body.siteLocation ?? existing.siteLocation,
           region: req.body.region ?? existing.region,
+          state: req.body.state ?? existing.state,
+          district: req.body.district ?? existing.district,
           priority: req.body.priority ?? existing.priority,
           l1Sla: existing.l1Sla,
           preferredEngineerId: req.body.preferredEngineerId,

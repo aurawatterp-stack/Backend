@@ -437,9 +437,9 @@ async function buildServiceAssignment(input) {
         };
     }
     if (mappedPrimary && !preferredEngineer && input.level === "L2") {
-        const primaryAssignment = assignmentForEngineer(engineer);
+        const primaryAssignment = assignmentForEngineer(mappedPrimary);
         if (!primaryAssignment) {
-            return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+            return { blockedMessage: `Mapped L2 engineer ${districtPrimary?.name || "unknown"} is unavailable for ${regionConfig.name}. Please verify the complaint location or engineer mapping.` };
         }
         return {
             region: regionConfig.name,
@@ -447,6 +447,11 @@ async function buildServiceAssignment(input) {
             escalationLevel: input.level,
             backupEngineerName: mappedBackup?.name ?? districtBackup?.name,
             ...primaryAssignment,
+        };
+    }
+    if (!preferredEngineer && input.level === "L2") {
+        return {
+            blockedMessage: `No L2 mapping found for ${regionConfig.name}. Please verify the complaint location before escalating.`,
         };
     }
     const genericAssignment = assignmentForEngineer(engineer);
@@ -842,8 +847,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         return (0, http_1.fail)(res, "type, dateOfComplaint, issueDescription are required");
     }
     if (String(type).toLowerCase() === "consumer") {
-        if (!productSerialNo || !customerName || !mobileNumber || !complaintState || !complaintDistrict) {
-            return (0, http_1.fail)(res, "Serial number, customer name, mobile number, state, district and complaint description are required");
+        if (!customerName || !mobileNumber || !complaintState || !complaintDistrict) {
+            return (0, http_1.fail)(res, "Customer name, mobile number, state and district are required");
         }
         if (customerEmail && !(0, validation_1.isValidEmailAddress)(customerEmail)) {
             return (0, http_1.fail)(res, "Please enter a valid email address");
@@ -1351,6 +1356,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
                 issueDescription: req.body.issueDescription ?? existing.issueDescription,
                 siteLocation: req.body.siteLocation ?? existing.siteLocation,
                 region: req.body.region ?? existing.region,
+                state: req.body.state ?? existing.state,
+                district: req.body.district ?? existing.district,
                 priority: req.body.priority ?? existing.priority,
                 l1Sla: existing.l1Sla,
                 preferredEngineerId: req.body.preferredEngineerId,
