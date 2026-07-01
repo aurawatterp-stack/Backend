@@ -43,6 +43,25 @@ const REGISTERED_PRICE_CATEGORY = "Distributor Price";
 const PI_STATUS_PAYMENT_VERIFIED = "Payment Verified";
 const PI_STATUS_DISPATCH_READY = "Vehicle No. Shared";
 const PI_STATUS_DISPATCHED = "Dispatched";
+const PI_STATUS_SUBMITTED_ALIASES = ["Dispatch Request Pending", "PI Submitted - Pending Payment Verification"];
+const PI_STATUS_PAYMENT_VERIFIED_ALIASES = ["Payment Verified", "Payment Verified - Pending Dispatch Preparation"];
+const PI_STATUS_DISPATCH_READY_ALIASES = ["Vehicle No. Shared", "Dispatch Ready", "Dispatch Ready - Pending Invoice & E-Way Bill"];
+const PI_STATUS_DISPATCHED_ALIASES = ["Dispatched", "Ready for Final Dispatch"];
+function workflowStatusMatches(status, allowedStatuses) {
+    return allowedStatuses.includes(String(status ?? "").trim());
+}
+function isSubmittedWorkflowStatus(status) {
+    return workflowStatusMatches(status, PI_STATUS_SUBMITTED_ALIASES);
+}
+function isPaymentVerifiedWorkflowStatus(status) {
+    return workflowStatusMatches(status, PI_STATUS_PAYMENT_VERIFIED_ALIASES);
+}
+function isDispatchReadyWorkflowStatus(status) {
+    return workflowStatusMatches(status, PI_STATUS_DISPATCH_READY_ALIASES);
+}
+function isDispatchedWorkflowStatus(status) {
+    return workflowStatusMatches(status, PI_STATUS_DISPATCHED_ALIASES);
+}
 function piYearFromDate(value) {
     const parsed = value ? new Date(String(value)) : new Date();
     return Number.isFinite(parsed.getTime()) ? parsed.getFullYear() : new Date().getFullYear();
@@ -442,7 +461,7 @@ router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission
             if (sale.paymentStatus !== "Confirmed") {
                 return (0, http_1.fail)(res, "Accounts cannot upload Tax Invoice or E-Way Bill before payment verification");
             }
-            if (sale.piWorkflowStatus !== PI_STATUS_DISPATCH_READY) {
+            if (!isDispatchReadyWorkflowStatus(sale.piWorkflowStatus)) {
                 return (0, http_1.fail)(res, "Accounts can upload Tax Invoice and E-Way Bill only after vehicle no. is shared");
             }
         }
@@ -450,7 +469,7 @@ router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission
             if (!sale.accountsRequestAt) {
                 return (0, http_1.fail)(res, "Dispatch Team must forward the PI to Accounts before payment verification");
             }
-            if (sale.piWorkflowStatus !== PI_STATUS_SUBMITTED) {
+            if (!isSubmittedWorkflowStatus(sale.piWorkflowStatus)) {
                 return (0, http_1.fail)(res, "Payment verification can only be completed from the Accounts payment queue");
             }
         }
@@ -564,20 +583,20 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
     const isLegacyDispatchSubmission = !isNewPiWorkflow(sale) && Boolean(sale.piAttachmentName || sale.piAttachmentUrl) && !sale.accountsRequestAt && !sale.accountsSharedAt;
     if (isNewPiWorkflow(sale)) {
         if (forwardToAccounts) {
-            if (sale.piWorkflowStatus !== PI_STATUS_SUBMITTED) {
+            if (!isSubmittedWorkflowStatus(sale.piWorkflowStatus)) {
                 return (0, http_1.fail)(res, "Only a new dispatch request can be forwarded to Accounts");
             }
         }
         else if (sale.paymentStatus !== "Confirmed") {
             return (0, http_1.fail)(res, "Payment must be verified by Accounts before Dispatch Team can prepare this PI");
         }
-        if (dispatchStatus === "Ready" && sale.piWorkflowStatus !== PI_STATUS_PAYMENT_VERIFIED) {
+        if (dispatchStatus === "Ready" && !isPaymentVerifiedWorkflowStatus(sale.piWorkflowStatus)) {
             return (0, http_1.fail)(res, "Vehicle no. can only be shared after Accounts verifies payment");
         }
         if (dispatchStatus === "Ready" && !serialNumber && !sale.serialNumber) {
             return (0, http_1.fail)(res, "Vehicle no. is required before sharing the request with Accounts");
         }
-        if (isDeliveryStatus && sale.piWorkflowStatus !== PI_STATUS_DISPATCH_READY) {
+        if (isDeliveryStatus && !isDispatchReadyWorkflowStatus(sale.piWorkflowStatus)) {
             return (0, http_1.fail)(res, "Final dispatch can happen only after Accounts uploads Tax Invoice and E-Way Bill");
         }
         if (isDeliveryStatus &&

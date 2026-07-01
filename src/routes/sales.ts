@@ -43,6 +43,30 @@ const REGISTERED_PRICE_CATEGORY = "Distributor Price";
 const PI_STATUS_PAYMENT_VERIFIED = "Payment Verified";
 const PI_STATUS_DISPATCH_READY = "Vehicle No. Shared";
 const PI_STATUS_DISPATCHED = "Dispatched";
+const PI_STATUS_SUBMITTED_ALIASES = ["Dispatch Request Pending", "PI Submitted - Pending Payment Verification"] as const;
+const PI_STATUS_PAYMENT_VERIFIED_ALIASES = ["Payment Verified", "Payment Verified - Pending Dispatch Preparation"] as const;
+const PI_STATUS_DISPATCH_READY_ALIASES = ["Vehicle No. Shared", "Dispatch Ready", "Dispatch Ready - Pending Invoice & E-Way Bill"] as const;
+const PI_STATUS_DISPATCHED_ALIASES = ["Dispatched", "Ready for Final Dispatch"] as const;
+
+function workflowStatusMatches(status: unknown, allowedStatuses: readonly string[]) {
+  return allowedStatuses.includes(String(status ?? "").trim());
+}
+
+function isSubmittedWorkflowStatus(status: unknown) {
+  return workflowStatusMatches(status, PI_STATUS_SUBMITTED_ALIASES);
+}
+
+function isPaymentVerifiedWorkflowStatus(status: unknown) {
+  return workflowStatusMatches(status, PI_STATUS_PAYMENT_VERIFIED_ALIASES);
+}
+
+function isDispatchReadyWorkflowStatus(status: unknown) {
+  return workflowStatusMatches(status, PI_STATUS_DISPATCH_READY_ALIASES);
+}
+
+function isDispatchedWorkflowStatus(status: unknown) {
+  return workflowStatusMatches(status, PI_STATUS_DISPATCHED_ALIASES);
+}
 
 function piYearFromDate(value: unknown) {
   const parsed = value ? new Date(String(value)) : new Date();
@@ -506,14 +530,14 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
       if (sale.paymentStatus !== "Confirmed") {
         return fail(res, "Accounts cannot upload Tax Invoice or E-Way Bill before payment verification");
       }
-      if (sale.piWorkflowStatus !== PI_STATUS_DISPATCH_READY) {
+      if (!isDispatchReadyWorkflowStatus(sale.piWorkflowStatus)) {
         return fail(res, "Accounts can upload Tax Invoice and E-Way Bill only after vehicle no. is shared");
       }
     } else if (wantsPaymentVerification) {
       if (!sale.accountsRequestAt) {
         return fail(res, "Dispatch Team must forward the PI to Accounts before payment verification");
       }
-      if (sale.piWorkflowStatus !== PI_STATUS_SUBMITTED) {
+      if (!isSubmittedWorkflowStatus(sale.piWorkflowStatus)) {
         return fail(res, "Payment verification can only be completed from the Accounts payment queue");
       }
     } else {
@@ -660,19 +684,19 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
 
   if (isNewPiWorkflow(sale)) {
     if (forwardToAccounts) {
-      if (sale.piWorkflowStatus !== PI_STATUS_SUBMITTED) {
+      if (!isSubmittedWorkflowStatus(sale.piWorkflowStatus)) {
         return fail(res, "Only a new dispatch request can be forwarded to Accounts");
       }
     } else if (sale.paymentStatus !== "Confirmed") {
       return fail(res, "Payment must be verified by Accounts before Dispatch Team can prepare this PI");
     }
-    if (dispatchStatus === "Ready" && sale.piWorkflowStatus !== PI_STATUS_PAYMENT_VERIFIED) {
+    if (dispatchStatus === "Ready" && !isPaymentVerifiedWorkflowStatus(sale.piWorkflowStatus)) {
       return fail(res, "Vehicle no. can only be shared after Accounts verifies payment");
     }
     if (dispatchStatus === "Ready" && !serialNumber && !sale.serialNumber) {
       return fail(res, "Vehicle no. is required before sharing the request with Accounts");
     }
-    if (isDeliveryStatus && sale.piWorkflowStatus !== PI_STATUS_DISPATCH_READY) {
+    if (isDeliveryStatus && !isDispatchReadyWorkflowStatus(sale.piWorkflowStatus)) {
       return fail(res, "Final dispatch can happen only after Accounts uploads Tax Invoice and E-Way Bill");
     }
     if (
