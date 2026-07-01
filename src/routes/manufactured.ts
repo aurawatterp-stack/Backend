@@ -581,14 +581,18 @@ router.post("/:id/return", authenticate, requireAnyPermission("inventory:manufac
 
 router.get("/faulty-returns", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
   const c = await getCollections();
-  
-  const pendingReturns = await c.complaints.find({ faultyReturnStatus: "Pending" }).toArray();
+  const returnRecords = await c.complaints
+    .find({ faultyReturnStatus: { $in: ["Pending", "Received"] } })
+    .sort({ updatedAt: -1, createdAt: -1 })
+    .toArray();
+  const pendingReturns = returnRecords.filter((complaint) => complaint.faultyReturnStatus === "Pending");
   const faultyInverters = await c.manufactured.find({ status: "Faulty" }).toArray();
   const faultySpares = await c.rawMaterials.find({ faultyQuantity: { $gt: 0 } }).toArray();
   const repairedInverters = await c.manufactured.find({ status: "Repaired" }).toArray();
   const repairedSpares = await c.rawMaterials.find({ repairedQuantity: { $gt: 0 } }).toArray();
 
   return ok(res, {
+    returnRecords,
     pendingReturns,
     faultyInverters,
     faultySpares,

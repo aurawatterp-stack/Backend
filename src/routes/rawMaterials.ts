@@ -37,6 +37,16 @@ async function suggestBatchForReceipt(productSeriesId: string, referenceNo: stri
   return `BATCH-${highest + 1}`;
 }
 
+/** GET /api/raw-materials/meta - vendor suggestions */
+router.get("/meta", authenticate, requireAnyPermission("inventory:raw-materials", "complaints:supplier"), async (_req: Request, res: Response) => {
+  const c = await getCollections();
+  const vendorNames = await c.rawMaterials.distinct("vendorName", {
+    vendorName: { $type: "string", $ne: "" },
+  });
+  const vendors = [...new Set(vendorNames.map((vendor) => String(vendor).trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b));
+  return ok(res, { vendors });
+});
+
 /** GET /api/raw-materials - filter by series, batch, vendor, inwardMode */
 router.get("/", authenticate, requireAnyPermission("inventory:raw-materials", "complaints:supplier"), async (req: Request, res: Response) => {
   const c = await getCollections();
