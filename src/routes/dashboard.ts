@@ -20,10 +20,7 @@ function complaintAssignedToEngineer(complaint: Complaint, user: AuthUser) {
     complaint.assignedEngineerId === user.userId ||
     (userName && normalizeText(complaint.assignedEngineerName) === userName) ||
     complaint.siteVisitEngineerId === user.userId ||
-    (userName && normalizeText(complaint.siteVisitEngineerName) === userName) ||
-    (userName && normalizeText(complaint.engineerName) === userName) ||
-    complaint.replacementEngineerId === user.userId ||
-    (userName && normalizeText(complaint.replacementEngineerName) === userName)
+    (userName && normalizeText(complaint.siteVisitEngineerName) === userName)
   );
 }
 

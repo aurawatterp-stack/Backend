@@ -18,10 +18,7 @@ function complaintAssignedToEngineer(complaint, user) {
     return (complaint.assignedEngineerId === user.userId ||
         (userName && normalizeText(complaint.assignedEngineerName) === userName) ||
         complaint.siteVisitEngineerId === user.userId ||
-        (userName && normalizeText(complaint.siteVisitEngineerName) === userName) ||
-        (userName && normalizeText(complaint.engineerName) === userName) ||
-        complaint.replacementEngineerId === user.userId ||
-        (userName && normalizeText(complaint.replacementEngineerName) === userName));
+        (userName && normalizeText(complaint.siteVisitEngineerName) === userName));
 }
 function isClosedStatus(status) {
     return status === "Resolved by Aurawatt" || status === "Resolved by Suppliers";

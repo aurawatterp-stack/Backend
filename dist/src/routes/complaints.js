@@ -110,6 +110,9 @@ const ASSIGNABLE_SERVICE_ENGINEER_EMAILS = new Set([
 function normalizeText(value) {
     return String(value ?? "").trim();
 }
+function stripUndefinedFields(value) {
+    return Object.fromEntries(Object.entries(value).filter(([, v]) => v !== undefined));
+}
 function normalizeSpareRequestParts(input) {
     if (!Array.isArray(input))
         return [];
@@ -503,9 +506,10 @@ async function releaseNextWaitingTicket(identities = [], level) {
         if (assignment.blockedMessage || assignment.assignmentStatus !== "Assigned")
             break;
         const promotedAt = new Date();
+        const { waitingSince: _waitingSince, queuePosition: _queuePosition, ...assignmentSet } = assignment;
         await c.complaints.updateOne({ id: next.id }, {
             $set: {
-                ...assignment,
+                ...assignmentSet,
                 updatedAt: promotedAt,
             },
             $unset: { waitingSince: "", queuePosition: "" },
@@ -550,8 +554,9 @@ async function releaseNextWaitingTicketExcluding(identities = [], level, exclude
     });
     if (!assignment.blockedMessage && assignment.assignmentStatus === "Assigned") {
         const promotedAt = new Date();
+        const { waitingSince: _waitingSince, queuePosition: _queuePosition, ...assignmentSet } = assignment;
         await c.complaints.updateOne({ id: next.id }, {
-            $set: { ...assignment, updatedAt: promotedAt },
+            $set: { ...assignmentSet, updatedAt: promotedAt },
             $unset: { waitingSince: "", queuePosition: "" },
         });
     }
@@ -662,7 +667,6 @@ function complaintRoleScope(user) {
                 ...(user.name ? [{ assignedEngineerName: user.name }] : []),
                 { siteVisitRequired: true, siteVisitEngineerId: user.userId },
                 ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
-                ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
                 { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
                 ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
@@ -685,7 +689,6 @@ function complaintRoleScope(user) {
                 ...(user.name ? [{ assignedEngineerName: user.name }] : []),
                 { siteVisitRequired: true, siteVisitEngineerId: user.userId },
                 ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
-                ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
                 { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
                 ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
@@ -720,7 +723,7 @@ function canAccessComplaint(user, complaint) {
         return (complaint.assignedEngineerId === user.userId ||
             (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
             (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-            (complaint.siteVisitRequired === true && Boolean(user.name) && (complaint.siteVisitEngineerName === user.name || complaint.engineerName === user.name)) ||
+            (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
             (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1"));
     }
@@ -733,7 +736,7 @@ function canAccessComplaint(user, complaint) {
         return (complaint.assignedEngineerId === user.userId ||
             (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
             (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-            (complaint.siteVisitRequired === true && Boolean(user.name) && (complaint.siteVisitEngineerName === user.name || complaint.engineerName === user.name)) ||
+            (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
             (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2"));
     }
@@ -779,7 +782,8 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaint
         return (0, http_1.ok)(res, { data, total, page: p, limit: l });
     }
     catch (err) {
-        console.log(err);
+        console.error("Failed to load complaints list:", err);
+        return (0, http_1.fail)(res, err instanceof Error ? err.message : "Failed to load complaints", 500);
     }
 });
 /** GET /api/complaints/stats — for donut chart */
@@ -1567,7 +1571,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             update.faultyReturnItemId = existing.spareParts[0].rawMaterialId;
         }
     }
-    const setDoc = { ...update };
+    const setDoc = stripUndefinedFields({ ...update });
     if (nextSerialKey) {
         setDoc.productSerialNoKey = nextSerialKey;
     }

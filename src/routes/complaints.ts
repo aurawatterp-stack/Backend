@@ -127,6 +127,12 @@ function normalizeText(value: unknown) {
   return String(value ?? "").trim();
 }
 
+function stripUndefinedFields<T extends Record<string, unknown>>(value: T) {
+  return Object.fromEntries(
+    Object.entries(value).filter(([, v]) => v !== undefined)
+  ) as Partial<T>;
+}
+
 function normalizeSpareRequestParts(input: unknown): NonNullable<Complaint["spareParts"]> {
   if (!Array.isArray(input)) return [];
   return input
@@ -579,11 +585,12 @@ async function releaseNextWaitingTicket(identities: EngineerIdentity[] = [], lev
     });
     if (assignment.blockedMessage || assignment.assignmentStatus !== "Assigned") break;
     const promotedAt = new Date();
+    const { waitingSince: _waitingSince, queuePosition: _queuePosition, ...assignmentSet } = assignment;
     await c.complaints.updateOne(
       { id: next.id },
       {
         $set: {
-          ...assignment,
+          ...assignmentSet,
           updatedAt: promotedAt,
         },
         $unset: { waitingSince: "", queuePosition: "" },
@@ -635,10 +642,11 @@ async function releaseNextWaitingTicketExcluding(identities: EngineerIdentity[] 
   });
   if (!assignment.blockedMessage && assignment.assignmentStatus === "Assigned") {
     const promotedAt = new Date();
+    const { waitingSince: _waitingSince, queuePosition: _queuePosition, ...assignmentSet } = assignment;
     await c.complaints.updateOne(
       { id: next.id },
       {
-        $set: { ...assignment, updatedAt: promotedAt },
+        $set: { ...assignmentSet, updatedAt: promotedAt },
         $unset: { waitingSince: "", queuePosition: "" },
       }
     );
@@ -763,7 +771,6 @@ function complaintRoleScope(user: AuthUser): Record<string, unknown> | null {
         ...(user.name ? [{ assignedEngineerName: user.name }] : []),
         { siteVisitRequired: true, siteVisitEngineerId: user.userId },
         ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
-        ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
         { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
         ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
         { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
@@ -788,7 +795,6 @@ function complaintRoleScope(user: AuthUser): Record<string, unknown> | null {
         ...(user.name ? [{ assignedEngineerName: user.name }] : []),
         { siteVisitRequired: true, siteVisitEngineerId: user.userId },
         ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
-        ...(user.name ? [{ siteVisitRequired: true, engineerName: user.name }] : []),
         { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
         ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
         { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
@@ -827,7 +833,7 @@ function canAccessComplaint(user: AuthUser, complaint: Complaint): boolean {
       complaint.assignedEngineerId === user.userId ||
       (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
       (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-      (complaint.siteVisitRequired === true && Boolean(user.name) && (complaint.siteVisitEngineerName === user.name || complaint.engineerName === user.name)) ||
+      (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
       (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
       (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1")
     );
@@ -844,7 +850,7 @@ function canAccessComplaint(user: AuthUser, complaint: Complaint): boolean {
       complaint.assignedEngineerId === user.userId ||
       (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
       (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-      (complaint.siteVisitRequired === true && Boolean(user.name) && (complaint.siteVisitEngineerName === user.name || complaint.engineerName === user.name)) ||
+      (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
       (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
       (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2")
     );
@@ -890,7 +896,8 @@ router.get("/", authenticate, requireAnyPermission("complaints:consumer", "compl
     const data = await c.complaints.find(scopedFilter).skip((p - 1) * l).limit(l).toArray();
     return ok(res, { data, total, page: p, limit: l });
   } catch (err: any) {
-    console.log(err);
+    console.error("Failed to load complaints list:", err);
+    return fail(res, err instanceof Error ? err.message : "Failed to load complaints", 500);
   }
 });
 
@@ -1819,7 +1826,7 @@ router.put(
       }
     }
 
-    const setDoc: Record<string, unknown> = { ...update };
+    const setDoc: Record<string, unknown> = stripUndefinedFields({ ...update });
     if (nextSerialKey) {
       setDoc.productSerialNoKey = nextSerialKey;
     }
