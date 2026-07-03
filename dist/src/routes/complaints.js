@@ -649,6 +649,28 @@ async function rebalanceL1Queue() {
         return;
     await Promise.all(updates);
 }
+let queueRebalanceInFlight = null;
+/**
+ * rebalanceL1Queue/rebalanceWaitingLobby each do a full, sequential sweep of the
+ * collection. GET /api/complaints runs this on every call, so closing several
+ * tickets in quick succession (each triggering its own reload) used to fire that
+ * many overlapping full sweeps concurrently, slowing/timing out the backend.
+ * Collapse concurrent callers onto a single in-flight sweep instead.
+ */
+async function runQueueRebalance() {
+    if (!queueRebalanceInFlight) {
+        queueRebalanceInFlight = (async () => {
+            try {
+                await rebalanceL1Queue();
+                await rebalanceWaitingLobby();
+            }
+            finally {
+                queueRebalanceInFlight = null;
+            }
+        })();
+    }
+    return queueRebalanceInFlight;
+}
 function requireComplaintTypeAccess(user, type) {
     const t = (type || "").trim().toLowerCase();
     if (user.role === "Admin")
@@ -755,8 +777,7 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaint
             return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
         }
         if (!view && (!type || String(type).toLowerCase() === "consumer")) {
-            await rebalanceL1Queue();
-            await rebalanceWaitingLobby();
+            await runQueueRebalance();
         }
         const filter = {};
         if (type)
@@ -1330,6 +1351,10 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             district: req.body.district ?? existing.district,
             priority: req.body.priority ?? existing.priority,
             l1Sla: existing.l1Sla,
+            // Manually picking a specific engineer is an explicit override; without
+            // forceAssign, buildServiceAssignment ignores preferredEngineer* whenever a
+            // district mapping exists and silently reassigns back to the mapped engineer.
+            forceAssign: true,
             preferredEngineerId: target.id,
             preferredEngineerName: target.name,
             preferredEngineerEmail: target.email,
@@ -1611,17 +1636,6 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         }
         catch (err) {
             console.warn("Failed to insert workflow notification:", err instanceof Error ? err.message : String(err));
-        }
-    }
-    if (complaintRules_1.CLOSED_COMPLAINT_STATUSES.includes(String(update.status)) && (0, complaintRules_1.isActiveWorkComplaint)(existing)) {
-        try {
-            await releaseNextWaitingTicket([
-                { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
-                { engineerId: user.userId, engineerName: user.name },
-            ], normalizeServiceLevel(existing.escalationLevel));
-        }
-        catch (err) {
-            console.warn("Failed to release next waiting ticket:", err instanceof Error ? err.message : String(err));
         }
     }
     const updated = await c.complaints.findOne({ id });

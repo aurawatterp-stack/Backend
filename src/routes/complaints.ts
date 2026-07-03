@@ -755,6 +755,29 @@ async function rebalanceL1Queue() {
   await Promise.all(updates);
 }
 
+let queueRebalanceInFlight: Promise<void> | null = null;
+
+/**
+ * rebalanceL1Queue/rebalanceWaitingLobby each do a full, sequential sweep of the
+ * collection. GET /api/complaints runs this on every call, so closing several
+ * tickets in quick succession (each triggering its own reload) used to fire that
+ * many overlapping full sweeps concurrently, slowing/timing out the backend.
+ * Collapse concurrent callers onto a single in-flight sweep instead.
+ */
+async function runQueueRebalance(): Promise<void> {
+  if (!queueRebalanceInFlight) {
+    queueRebalanceInFlight = (async () => {
+      try {
+        await rebalanceL1Queue();
+        await rebalanceWaitingLobby();
+      } finally {
+        queueRebalanceInFlight = null;
+      }
+    })();
+  }
+  return queueRebalanceInFlight;
+}
+
 function requireComplaintTypeAccess(user: AuthUser, type: string): boolean {
   const t = (type || "").trim().toLowerCase();
   if (user.role === "Admin") return true;
@@ -871,8 +894,7 @@ router.get("/", authenticate, requireAnyPermission("complaints:consumer", "compl
       return fail(res, "Access denied: insufficient permissions", 403);
     }
     if (!view && (!type || String(type).toLowerCase() === "consumer")) {
-      await rebalanceL1Queue();
-      await rebalanceWaitingLobby();
+      await runQueueRebalance();
     }
     const filter: Record<string, unknown> = {};
     if (type) filter.type = type;
@@ -1577,6 +1599,10 @@ router.put(
         district: req.body.district ?? existing.district,
         priority: req.body.priority ?? existing.priority,
         l1Sla: existing.l1Sla,
+        // Manually picking a specific engineer is an explicit override; without
+        // forceAssign, buildServiceAssignment ignores preferredEngineer* whenever a
+        // district mapping exists and silently reassigns back to the mapped engineer.
+        forceAssign: true,
         preferredEngineerId: target.id,
         preferredEngineerName: target.name,
         preferredEngineerEmail: target.email,
@@ -1870,16 +1896,6 @@ router.put(
       }
     }
 
-    if (CLOSED_COMPLAINT_STATUSES.includes(String(update.status) as (typeof CLOSED_COMPLAINT_STATUSES)[number]) && isActiveWorkComplaint(existing)) {
-      try {
-        await releaseNextWaitingTicket([
-          { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
-          { engineerId: user.userId, engineerName: user.name },
-        ], normalizeServiceLevel(existing.escalationLevel));
-      } catch (err) {
-        console.warn("Failed to release next waiting ticket:", err instanceof Error ? err.message : String(err));
-      }
-    }
     const updated = await c.complaints.findOne({ id });
     if (updated && req.body.notifyAdminOnCompletion && CLOSED_COMPLAINT_STATUSES.includes(String(update.status) as (typeof CLOSED_COMPLAINT_STATUSES)[number])) {
       try {
