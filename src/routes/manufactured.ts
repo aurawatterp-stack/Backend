@@ -185,7 +185,7 @@ async function resolveManufacturingSerial(
 router.get(
   "/",
   authenticate,
-  requireAnyPermission("inventory:manufactured", "sales:entry", "complaints:consumer"),
+  requireAnyPermission("inventory:manufactured", "sales:entry", "complaints:consumer", "dispatch:manage"),
   async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", status, model, page = "1", limit = "20" } = req.query as Record<string, string>;
@@ -499,6 +499,33 @@ router.post("/approval-requests/:id/approve", authenticate, requireAnyPermission
   return ok(res, updated);
 });
 
+router.put("/mark-repaired", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+  const { type, id } = req.body;
+  const c = await getCollections();
+  const now = new Date();
+
+  if (type === "Inverter") {
+    const mfg = await c.manufactured.findOne({ id });
+    if (!mfg) return fail(res, "Inverter not found", 404);
+    if (mfg.status !== "Faulty") return fail(res, "Inverter is not faulty", 400);
+
+    await c.manufactured.updateOne({ id }, { $set: { status: "Repaired", updatedAt: now } });
+    return ok(res, { message: "Inverter marked as repaired" });
+  } else if (type === "Spare Part") {
+    const raw = await c.rawMaterials.findOne({ id });
+    if (!raw) return fail(res, "Spare part not found", 404);
+    if (!raw.faultyQuantity || raw.faultyQuantity <= 0) return fail(res, "No faulty stock available", 400);
+
+    await c.rawMaterials.updateOne(
+      { id },
+      { $inc: { faultyQuantity: -1, repairedQuantity: 1 }, $set: { updatedAt: now } }
+    );
+    return ok(res, { message: "Spare part marked as repaired" });
+  }
+
+  return fail(res, "Invalid type", 400);
+});
+
 /** PUT /api/manufactured/:id/bom — modify BOM and adjust raw material stock by delta only */
 router.put("/:id/bom", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
   const c = await getCollections();
@@ -564,9 +591,11 @@ router.post("/:id/return", authenticate, requireAnyPermission("inventory:manufac
   if (!existing) return fail(res, "Record not found", 404);
   const { returnReason, replacedWithSerial } = req.body;
   const updatedAt = new Date();
-  
+  const isWarrantyCase = String(returnReason || "").startsWith("Warranty Case");
+  const nextStatus: "Faulty" | "Returned" = isWarrantyCase ? "Faulty" : "Returned";
+
   const update = {
-    status: "Returned" as const,
+    status: nextStatus,
     returnReason: returnReason || "",
     returnedAt: new Date(),
     returnedBy: (req as any).user?.id,
@@ -636,33 +665,6 @@ router.put("/faulty-return/:complaintId/receive", authenticate, requireAnyPermis
   );
 
   return ok(res, { message: "Return received successfully" });
-});
-
-router.put("/mark-repaired", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
-  const { type, id } = req.body;
-  const c = await getCollections();
-  const now = new Date();
-
-  if (type === "Inverter") {
-    const mfg = await c.manufactured.findOne({ id });
-    if (!mfg) return fail(res, "Inverter not found", 404);
-    if (mfg.status !== "Faulty") return fail(res, "Inverter is not faulty", 400);
-
-    await c.manufactured.updateOne({ id }, { $set: { status: "Repaired", updatedAt: now } });
-    return ok(res, { message: "Inverter marked as repaired" });
-  } else if (type === "Spare Part") {
-    const raw = await c.rawMaterials.findOne({ id });
-    if (!raw) return fail(res, "Spare part not found", 404);
-    if (!raw.faultyQuantity || raw.faultyQuantity <= 0) return fail(res, "No faulty stock available", 400);
-
-    await c.rawMaterials.updateOne(
-      { id },
-      { $inc: { faultyQuantity: -1, repairedQuantity: 1 }, $set: { updatedAt: now } }
-    );
-    return ok(res, { message: "Spare part marked as repaired" });
-  }
-
-  return fail(res, "Invalid type", 400);
 });
 
 export default router;
