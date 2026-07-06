@@ -203,7 +203,7 @@ router.get(
   const p = Math.max(1, parseInt(page));
   const l = Math.min(100, parseInt(limit));
   const total = await c.manufactured.countDocuments(filter);
-  const data = await c.manufactured.find(filter).skip((p - 1) * l).limit(l).toArray();
+  const data = await c.manufactured.find(filter).sort({ createdAt: -1 }).skip((p - 1) * l).limit(l).toArray();
   return ok(res, { data, total, page: p, limit: l });
   }
 );
