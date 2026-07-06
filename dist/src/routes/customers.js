@@ -659,7 +659,7 @@ router.get("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("custom
     return (0, http_1.ok)(res, customer);
 });
 /** POST /api/customers */
-router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { name, type, email, phone, address, stateRegion, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
     const nextName = String(name ?? "").trim();

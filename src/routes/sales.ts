@@ -1,4 +1,4 @@
-﻿import express, { type NextFunction, type Request, type Response, type Router } from "express";
+import express, { type NextFunction, type Request, type Response, type Router } from "express";
 import multer from "multer";
 
 import { getCollections } from "../db/collections";
@@ -843,7 +843,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
  * Records a sales workflow entry. If serialNumber is supplied, also marks
  * the manufactured product as Sold for backward-compatible serial sales.
  */
-router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("sales:entry", "dispatch:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const {
     serialNumber,

@@ -9,7 +9,7 @@ import { generateId } from "../utils/id";
 const router: Router = express.Router();
 
 /** GET /api/products */
-router.get("/", authenticate, requireAnyPermission("inventory:products", "sales:entry", "complaints:consumer"), async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("inventory:products", "sales:entry", "complaints:consumer", "dispatch:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", series } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};

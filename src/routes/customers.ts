@@ -1,4 +1,4 @@
-﻿import express, { type NextFunction, type Request, type Response, type Router } from "express";
+import express, { type NextFunction, type Request, type Response, type Router } from "express";
 import multer from "multer";
 import fs from "node:fs";
 import os from "node:os";
@@ -725,7 +725,7 @@ router.get("/:id", authenticate, requireAnyPermission("customers:manage", "sales
 });
 
 /** POST /api/customers */
-router.post("/", authenticate, requireAnyPermission("customers:manage", "sales:entry"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("customers:manage", "sales:entry", "dispatch:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const {
     name,

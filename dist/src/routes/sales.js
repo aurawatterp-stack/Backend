@@ -716,7 +716,7 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
  * Records a sales workflow entry. If serialNumber is supplied, also marks
  * the manufactured product as Sold for backward-compatible serial sales.
  */
-router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
+router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { serialNumber, documentType, referenceNo, saleDate, customerId, unregisteredCustomerName, unregisteredCustomerAddress, unregisteredCustomerGst, shipToAddressKey, registrationCode, materialName, quantity, piItems, stateRegion, dealerRegistered, rjApprovalStatus, forcePiPermission, priceCategory, availableQuantity, inventoryStatus, forcePiApprovalStatus, piAttachmentName, piAttachmentUrl, expectedDispatchDate, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, paymentStatus, } = req.body;
     const isRegisteredCustomer = dealerRegistered !== false;
