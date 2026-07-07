@@ -574,7 +574,7 @@ router.put("/:id/sales-dispatch", auth_1.authenticate, (0, auth_1.requireAnyPerm
 router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermission)("dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { id } = req.params;
-    const { serialNumber, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, forwardToAccounts, vehicleNo, } = req.body;
+    const { serialNumber, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, forwardToAccounts, vehicleNo, piItems, } = req.body;
     const sale = await c.sales.findOne({ id });
     if (!sale)
         return (0, http_1.fail)(res, "PI record not found", 404);
@@ -614,35 +614,61 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
     if (vehicleNo !== undefined) {
         update.vehicleNo = String(vehicleNo).trim();
     }
-    const normalizedSerialNumber = normalizeSerialNumber(serialNumber);
-    if (serialNumber) {
-        update.serialNumber = normalizedSerialNumber;
-        if (isDeliveryStatus) {
-            const mfg = await resolveManufacturedProductForSerial(c, sale, normalizedSerialNumber);
-            if (mfg) {
-                if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo)
-                    return (0, http_1.fail)(res, "This product is already sold");
-                await c.manufactured.updateOne({ id: mfg.id }, {
-                    $set: {
-                        status: "Sold",
-                        invoiceNo: sale.referenceNo,
-                        customerId: sale.customerId,
-                        soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
-                        paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
-                        updatedAt: new Date(),
-                    },
-                });
-                await (0, serialLifecycle_1.updateSerialStatus)(c, {
-                    serialNumber: normalizedSerialNumber,
-                    status: "Dispatched",
-                });
+    let allSerials = [];
+    if (piItems && Array.isArray(piItems)) {
+        // Validate each item
+        for (const item of piItems) {
+            if (item.serialNumbers && Array.isArray(item.serialNumbers)) {
+                const serials = item.serialNumbers.map((s) => normalizeSerialNumber(s)).filter(Boolean);
+                if (serials.length > item.quantity) {
+                    return (0, http_1.fail)(res, `Cannot allocate more serial numbers than quantity (${item.quantity}) for ${item.materialName}`);
+                }
+                item.serialNumbers = serials;
+                allSerials.push(...serials);
             }
-            else {
-                console.warn("Dispatch finalization skipped manufactured lookup for unmapped serial", {
-                    saleId: sale.id,
-                    referenceNo: sale.referenceNo,
-                    serialNumber: normalizedSerialNumber,
-                });
+        }
+        // Check for duplicates
+        const uniqueSerials = new Set(allSerials);
+        if (uniqueSerials.size !== allSerials.length) {
+            return (0, http_1.fail)(res, "Duplicate serial numbers selected");
+        }
+        update.piItems = piItems;
+    }
+    const normalizedSerialNumber = normalizeSerialNumber(serialNumber);
+    if (allSerials.length === 0 && normalizedSerialNumber) {
+        allSerials = [normalizedSerialNumber];
+    }
+    if (allSerials.length > 0) {
+        update.serialNumber = allSerials.join(", ");
+        if (isDeliveryStatus) {
+            for (const serial of allSerials) {
+                const mfg = await resolveManufacturedProductForSerial(c, sale, serial);
+                if (mfg) {
+                    if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo) {
+                        return (0, http_1.fail)(res, `Product with serial ${serial} is already sold`);
+                    }
+                    await c.manufactured.updateOne({ id: mfg.id }, {
+                        $set: {
+                            status: "Sold",
+                            invoiceNo: sale.referenceNo,
+                            customerId: sale.customerId,
+                            soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
+                            paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
+                            updatedAt: new Date(),
+                        },
+                    });
+                    await (0, serialLifecycle_1.updateSerialStatus)(c, {
+                        serialNumber: serial,
+                        status: "Dispatched",
+                    });
+                }
+                else {
+                    console.warn("Dispatch finalization skipped manufactured lookup for unmapped serial", {
+                        saleId: sale.id,
+                        referenceNo: sale.referenceNo,
+                        serialNumber: serial,
+                    });
+                }
             }
         }
     }

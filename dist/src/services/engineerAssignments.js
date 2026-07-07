@@ -8,6 +8,8 @@ exports.normalizeEngineerAssignmentRow = normalizeEngineerAssignmentRow;
 exports.parseEngineerAssignmentWorkbook = parseEngineerAssignmentWorkbook;
 exports.seedEngineerAssignmentsIfEmpty = seedEngineerAssignmentsIfEmpty;
 exports.ensureEngineerMasterRecord = ensureEngineerMasterRecord;
+exports.findEngineerMasterForUser = findEngineerMasterForUser;
+exports.listL1TeamForL2 = listL1TeamForL2;
 exports.resolveAssignmentByStateDistrict = resolveAssignmentByStateDistrict;
 exports.listEngineerAssignments = listEngineerAssignments;
 exports.listEngineerAssignmentOptions = listEngineerAssignmentOptions;
@@ -304,6 +306,46 @@ async function ensureEngineerMasterRecord(name, role) {
         },
     }, { upsert: true });
     return c.engineerMasters.findOne({ id });
+}
+async function findEngineerMasterForUser(user, role) {
+    const c = await (0, collections_1.getCollections)();
+    const email = normalizeText(user.email);
+    const name = normalizeText(user.name);
+    if (email) {
+        const byEmail = await c.engineerMasters.findOne({ role, email: exactMatchRegex(email) });
+        if (byEmail)
+            return byEmail;
+    }
+    if (name) {
+        const byName = await c.engineerMasters.findOne({ role, name: exactMatchRegex(name) });
+        if (byName)
+            return byName;
+    }
+    return null;
+}
+/**
+ * An L2 engineer's "team" is derived from the State/District Engineer Assignment
+ * mapping: every L1 (primary or backup) whose district lists this L2 as the
+ * district's L2 contact. There is no separate manager/reportsTo field in the app.
+ */
+async function listL1TeamForL2(user) {
+    const c = await (0, collections_1.getCollections)();
+    const l2Master = await findEngineerMasterForUser(user, "L2");
+    if (!l2Master)
+        return [];
+    const assignments = await c.engineerAssignments.find({ l2EngineerId: l2Master.id }).toArray();
+    const l1Ids = new Set();
+    for (const assignment of assignments) {
+        if (assignment.l1EngineerId)
+            l1Ids.add(assignment.l1EngineerId);
+        if (assignment.l1BackupEngineerId)
+            l1Ids.add(assignment.l1BackupEngineerId);
+    }
+    l1Ids.delete(l2Master.id);
+    if (!l1Ids.size)
+        return [];
+    const l1Masters = await c.engineerMasters.find({ id: { $in: [...l1Ids] }, isActive: { $ne: false } }).toArray();
+    return l1Masters;
 }
 async function resolveAssignmentByStateDistrict(state, district) {
     const c = await (0, collections_1.getCollections)();

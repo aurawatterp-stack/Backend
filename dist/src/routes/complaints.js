@@ -681,7 +681,7 @@ function requireComplaintTypeAccess(user, type) {
         return user.permissions.includes("complaints:supplier");
     return user.permissions.includes("complaints:consumer") || user.permissions.includes("complaints:supplier");
 }
-function complaintRoleScope(user) {
+async function complaintRoleScope(user) {
     if (user.role === "L1 Engineer") {
         return {
             $or: [
@@ -705,6 +705,8 @@ function complaintRoleScope(user) {
         };
     }
     if (user.role === "L2 Technical Team") {
+        const team = await (0, engineerAssignments_1.listL1TeamForL2)(user);
+        const teamNames = team.map((engineer) => engineer.name).filter(Boolean);
         return {
             $or: [
                 { assignedEngineerId: user.userId },
@@ -714,6 +716,7 @@ function complaintRoleScope(user) {
                 { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
                 ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
+                ...(teamNames.length ? [{ type: "Consumer", assignedEngineerName: { $in: teamNames } }] : []),
             ],
         };
     }
@@ -734,11 +737,11 @@ function onsiteTrackingScope(user) {
         $or: or,
     };
 }
-function applyComplaintRoleScope(filter, user) {
-    const scope = complaintRoleScope(user);
+async function applyComplaintRoleScope(filter, user) {
+    const scope = await complaintRoleScope(user);
     return scope ? { $and: [filter, scope] } : filter;
 }
-function canAccessComplaint(user, complaint) {
+async function canAccessComplaint(user, complaint) {
     if (!requireComplaintTypeAccess(user, String(complaint.type)))
         return false;
     if (user.role === "L1 Engineer") {
@@ -755,12 +758,20 @@ function canAccessComplaint(user, complaint) {
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1"));
     }
     if (user.role === "L2 Technical Team") {
-        return (complaint.assignedEngineerId === user.userId ||
+        const ownMatch = (complaint.assignedEngineerId === user.userId ||
             (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
             (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
             (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
             (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2"));
+        if (ownMatch)
+            return true;
+        if (complaint.type === "Consumer" && complaint.assignedEngineerName) {
+            const team = await (0, engineerAssignments_1.listL1TeamForL2)(user);
+            if (team.some((engineer) => engineer.name === complaint.assignedEngineerName))
+                return true;
+        }
+        return false;
     }
     if (user.role === "L3 Advanced OEM Support") {
         return true;
@@ -784,15 +795,14 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaint
             filter.type = type;
         if (status)
             filter.status = status;
-        const scopedFilter = view === "onsite-tracking"
-            ? (() => {
-                const scope = onsiteTrackingScope(user);
-                if (!scope) {
-                    return null;
-                }
-                return { $and: [filter, scope] };
-            })()
-            : applyComplaintRoleScope(filter, user);
+        let scopedFilter;
+        if (view === "onsite-tracking") {
+            const scope = onsiteTrackingScope(user);
+            scopedFilter = scope ? { $and: [filter, scope] } : null;
+        }
+        else {
+            scopedFilter = await applyComplaintRoleScope(filter, user);
+        }
         if (!scopedFilter) {
             return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
         }
@@ -834,6 +844,14 @@ router.get("/stats", auth_1.authenticate, (0, auth_1.requireAnyPermission)("comp
 router.get("/service-engineers", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (_req, res) => {
     const engineers = await serviceEngineers();
     return (0, http_1.ok)(res, engineers);
+});
+/** GET /api/complaints/my-l1-team — L1 engineers reporting to the current L2 engineer (via district mapping) */
+router.get("/my-l1-team", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), async (req, res) => {
+    const user = req.user;
+    if (user.role !== "L2 Technical Team")
+        return (0, http_1.ok)(res, []);
+    const team = await (0, engineerAssignments_1.listL1TeamForL2)(user);
+    return (0, http_1.ok)(res, team.map((engineer) => ({ id: engineer.id, name: engineer.name, role: engineer.role })));
 });
 /** POST /api/complaints/upload-inverter-picture — upload onsite inverter picture to Cloudinary */
 router.post("/upload-inverter-picture", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complaints:consumer", "complaints:supplier"), runInverterPictureUpload, async (req, res) => {
@@ -1101,7 +1119,7 @@ router.put("/:id/status", auth_1.authenticate, (0, auth_1.requireAnyPermission)(
     if (!existing)
         return (0, http_1.fail)(res, "Complaint not found", 404);
     const user = req.user;
-    if (!canAccessComplaint(user, existing)) {
+    if (!(await canAccessComplaint(user, existing))) {
         return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
     }
     const { status } = req.body;
@@ -1153,7 +1171,7 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     if (!existing)
         return (0, http_1.fail)(res, "Complaint not found", 404);
     const user = req.user;
-    if (!canAccessComplaint(user, existing)) {
+    if (!(await canAccessComplaint(user, existing))) {
         return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
     }
     const nextInspection = req.body.l1Inspection ?? existing.l1Inspection;
@@ -1337,7 +1355,12 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             : requestedAssignToRole.includes("L3")
                 ? "L3"
                 : "L1";
-        const candidates = await serviceEngineers(level);
+        if (user.role === "L2 Technical Team" && level !== "L1") {
+            return (0, http_1.fail)(res, "L2 engineers can only reassign tickets to L1 engineers.", 403);
+        }
+        const candidates = user.role === "L2 Technical Team"
+            ? await (0, engineerAssignments_1.listL1TeamForL2)(user)
+            : await serviceEngineers(level);
         const target = candidates.find((candidate) => candidate.id === requestedAssignToId);
         if (!target)
             return (0, http_1.fail)(res, "Selected engineer not found", 404);
@@ -1375,6 +1398,13 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
                 update.status = "Waiting Lobby";
             }
         }
+        workflowHistory.push(createWorkflowHistoryEvent({
+            action: "Reassigned ticket",
+            fromStatus: existing.status,
+            toStatus: String(update.status ?? existing.status),
+            user,
+            note: `${user.role === "L2 Technical Team" ? "L2" : "L3"} reassigned ticket from ${existing.assignedEngineerName || "unassigned"} to ${target.name} (${target.role}).`,
+        }));
     }
     else {
         const targetLevel = req.body.status === "Escalated to L2" || req.body.escalationLevel === "L2"
