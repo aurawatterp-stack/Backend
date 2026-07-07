@@ -383,6 +383,7 @@ export type Sale = {
     quantity: number;
     rate: number;
     gstRate: number;
+    serialNumbers?: string[];
   }[];
   stateRegion?: string;
   dealerRegistered?: boolean;
