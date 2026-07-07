@@ -63,7 +63,7 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory
     const p = Math.max(1, parseInt(page));
     const l = Math.min(100, parseInt(limit));
     const total = await c.rawMaterials.countDocuments(filter);
-    const data = await c.rawMaterials.find(filter).skip((p - 1) * l).limit(l).toArray();
+    const data = await c.rawMaterials.find(filter).sort({ createdAt: -1 }).skip((p - 1) * l).limit(l).toArray();
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
 /** POST /api/raw-materials */

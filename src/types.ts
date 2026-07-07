@@ -363,6 +363,7 @@ export type SerialEntry = {
 export type Sale = {
   id: string;
   serialNumber?: string;
+  vehicleNo?: string;
   documentType: string;
   referenceNo: string;
   saleDate: Date;
@@ -382,6 +383,7 @@ export type Sale = {
     quantity: number;
     rate: number;
     gstRate: number;
+    serialNumbers?: string[];
   }[];
   stateRegion?: string;
   dealerRegistered?: boolean;

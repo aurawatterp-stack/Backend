@@ -1255,6 +1255,9 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
     closedByName,
     closedByRole,
     closedAt: closedAt ? new Date(closedAt) : undefined,
+    faultyReturnStatus: replacementApprovalStatus === "Pending" ? "Pending" : (spareRequestStatus === "Requested" ? "Pending" : undefined),
+    faultyReturnType: replacementApprovalStatus === "Pending" ? "Inverter" : (spareRequestStatus === "Requested" ? "Spare Part" : undefined),
+    faultyReturnItemId: replacementApprovalStatus === "Pending" && productSerialNo ? productSerialNo : (spareRequestStatus === "Requested" && spareParts && spareParts.length > 0 ? (spareParts as any)[0].rawMaterialId : undefined),
     status: complaintStatus as Complaint["status"],
     raisedBy: user.userId,
     createdAt: new Date(),
@@ -1861,7 +1864,7 @@ router.put(
         }
       }
     }
-    if (update.replacementApprovalStatus === "Pending" && existing.replacementApprovalStatus !== "Pending") {
+    if (update.replacementApprovalStatus === "Pending" && (existing.replacementApprovalStatus !== "Pending" || !existing.faultyReturnStatus)) {
       update.faultyReturnStatus = "Pending";
       update.faultyReturnType = "Inverter";
       if (existing.productSerialNo) {
@@ -1869,7 +1872,7 @@ router.put(
       }
     }
 
-    if (update.spareRequestStatus === "Requested" && existing.spareRequestStatus !== "Requested") {
+    if (update.spareRequestStatus === "Requested" && (existing.spareRequestStatus !== "Requested" || !existing.faultyReturnStatus)) {
       update.faultyReturnStatus = "Pending";
       update.faultyReturnType = "Spare Part";
       if (update.spareParts && Array.isArray(update.spareParts) && update.spareParts.length > 0) {

@@ -158,15 +158,12 @@ async function resolveManufacturingSerial(c, productSeriesId, requestedSerial) {
     return { serialNumber: autoSerial };
 }
 /** GET /api/manufactured — filter by status, model, dateFrom, dateTo, customer */
-router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "sales:entry", "complaints:consumer"), async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "sales:entry", "complaints:consumer", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", status, model, page = "1", limit = "20" } = req.query;
     const filter = {};
-    if (status) {
+    if (status && status !== "all") {
         filter.status = status;
-    }
-    else {
-        filter.status = { $nin: ["Faulty", "Repaired"] };
     }
     if (model)
         filter.productId = model;
@@ -174,9 +171,9 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory
         filter.$or = [{ serialNumber: { $regex: q, $options: "i" } }, { productId: { $regex: q, $options: "i" } }];
     }
     const p = Math.max(1, parseInt(page));
-    const l = Math.min(100, parseInt(limit));
+    const l = Math.min(5000, parseInt(limit));
     const total = await c.manufactured.countDocuments(filter);
-    const data = await c.manufactured.find(filter).skip((p - 1) * l).limit(l).toArray();
+    const data = await c.manufactured.find(filter).sort({ createdAt: -1 }).skip((p - 1) * l).limit(l).toArray();
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
 /** POST /api/manufactured — record new production */
@@ -423,6 +420,49 @@ router.post("/approval-requests/:id/approve", auth_1.authenticate, (0, auth_1.re
     await insertDispatchApprovalNotification(c, complaint, user, "Spare approved for dispatch", `${parts.map((part) => `${part.materialName} x ${part.quantity}`).join(", ")} approved from Manufactured Products.`, { status: "Awaiting Dispatch", spareRequestStatus: "Approved" });
     return (0, http_1.ok)(res, updated);
 });
+router.put("/mark-repaired", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "inventory:raw-materials"), async (req, res) => {
+    const { type, id } = req.body;
+    const c = await (0, collections_1.getCollections)();
+    const now = new Date();
+    if (type === "Inverter") {
+        let query = { id };
+        if (typeof id === "string" && id.length === 24) {
+            try {
+                const { ObjectId } = require("mongodb");
+                query = { $or: [{ id }, { _id: new ObjectId(id) }, { serialNumber: id }] };
+            }
+            catch (err) { }
+        }
+        else {
+            query = { $or: [{ id }, { serialNumber: id }] };
+        }
+        const mfg = await c.manufactured.findOne(query);
+        if (!mfg)
+            return (0, http_1.fail)(res, "Inverter not found", 404);
+        if (mfg.status !== "Faulty" && mfg.status !== "Returned")
+            return (0, http_1.fail)(res, "Inverter is not faulty or returned", 400);
+        await c.manufactured.updateOne({ _id: mfg._id }, { $set: { status: "Repaired", updatedAt: now } });
+        return (0, http_1.ok)(res, { message: "Inverter marked as repaired" });
+    }
+    else if (type === "Spare Part") {
+        let query = { id };
+        if (typeof id === "string" && id.length === 24) {
+            try {
+                const { ObjectId } = require("mongodb");
+                query = { $or: [{ id }, { _id: new ObjectId(id) }] };
+            }
+            catch (err) { }
+        }
+        const raw = await c.rawMaterials.findOne(query);
+        if (!raw)
+            return (0, http_1.fail)(res, "Spare part not found", 404);
+        if (!raw.faultyQuantity || raw.faultyQuantity <= 0)
+            return (0, http_1.fail)(res, "No faulty stock available", 400);
+        await c.rawMaterials.updateOne({ _id: raw._id }, { $inc: { faultyQuantity: -1, repairedQuantity: 1 }, $set: { updatedAt: now } });
+        return (0, http_1.ok)(res, { message: "Spare part marked as repaired" });
+    }
+    return (0, http_1.fail)(res, "Invalid type", 400);
+});
 /** PUT /api/manufactured/:id/bom — modify BOM and adjust raw material stock by delta only */
 router.put("/:id/bom", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
@@ -482,8 +522,10 @@ router.post("/:id/return", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         return (0, http_1.fail)(res, "Record not found", 404);
     const { returnReason, replacedWithSerial } = req.body;
     const updatedAt = new Date();
+    const isWarrantyCase = String(returnReason || "").startsWith("Warranty Case");
+    const nextStatus = isWarrantyCase ? "Faulty" : "Returned";
     const update = {
-        status: "Returned",
+        status: nextStatus,
         returnReason: returnReason || "",
         returnedAt: new Date(),
         returnedBy: req.user?.id,
@@ -494,14 +536,14 @@ router.post("/:id/return", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     await c.manufactured.updateOne({ id }, { $set: update });
     return (0, http_1.ok)(res, { ...existing, ...update });
 });
-router.get("/faulty-returns", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
+router.get("/faulty-returns", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "inventory:raw-materials"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const returnRecords = await c.complaints
         .find({ faultyReturnStatus: { $in: ["Pending", "Received"] } })
         .sort({ updatedAt: -1, createdAt: -1 })
         .toArray();
     const pendingReturns = returnRecords.filter((complaint) => complaint.faultyReturnStatus === "Pending");
-    const faultyInverters = await c.manufactured.find({ status: "Faulty" }).toArray();
+    const faultyInverters = await c.manufactured.find({ status: { $in: ["Faulty", "Returned"] } }).toArray();
     const faultySpares = await c.rawMaterials.find({ faultyQuantity: { $gt: 0 } }).toArray();
     const repairedInverters = await c.manufactured.find({ status: "Repaired" }).toArray();
     const repairedSpares = await c.rawMaterials.find({ repairedQuantity: { $gt: 0 } }).toArray();
@@ -514,7 +556,7 @@ router.get("/faulty-returns", auth_1.authenticate, (0, auth_1.requireAnyPermissi
         repairedSpares,
     });
 });
-router.put("/faulty-return/:complaintId/receive", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
+router.put("/faulty-return/:complaintId/receive", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured", "inventory:raw-materials"), async (req, res) => {
     const { complaintId } = req.params;
     const c = await (0, collections_1.getCollections)();
     const complaint = await c.complaints.findOne({ id: complaintId });
@@ -527,40 +569,16 @@ router.put("/faulty-return/:complaintId/receive", auth_1.authenticate, (0, auth_
     if (complaint.faultyReturnType === "Inverter" && complaint.faultyReturnItemId) {
         const mfg = await c.manufactured.findOne({ serialNumber: complaint.faultyReturnItemId });
         if (mfg) {
-            await c.manufactured.updateOne({ id: mfg.id }, { $set: { status: "Faulty", returnReason: notes || "Returned from complaint " + complaint.id, updatedAt: now } });
+            await c.manufactured.updateOne({ _id: mfg._id }, { $set: { status: "Faulty", returnReason: notes || "Returned from complaint " + complaint.id, updatedAt: now } });
         }
     }
     else if (complaint.faultyReturnType === "Spare Part" && complaint.faultyReturnItemId) {
         const raw = await c.rawMaterials.findOne({ id: complaint.faultyReturnItemId });
         if (raw) {
-            await c.rawMaterials.updateOne({ id: raw.id }, { $inc: { faultyQuantity: 1 }, $set: { updatedAt: now } });
+            await c.rawMaterials.updateOne({ _id: raw._id }, { $inc: { faultyQuantity: 1 }, $set: { updatedAt: now } });
         }
     }
     await c.complaints.updateOne({ id: complaint.id }, { $set: { faultyReturnStatus: "Received", faultyReturnNotes: notes, updatedAt: now } });
     return (0, http_1.ok)(res, { message: "Return received successfully" });
-});
-router.put("/mark-repaired", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:manufactured"), async (req, res) => {
-    const { type, id } = req.body;
-    const c = await (0, collections_1.getCollections)();
-    const now = new Date();
-    if (type === "Inverter") {
-        const mfg = await c.manufactured.findOne({ id });
-        if (!mfg)
-            return (0, http_1.fail)(res, "Inverter not found", 404);
-        if (mfg.status !== "Faulty")
-            return (0, http_1.fail)(res, "Inverter is not faulty", 400);
-        await c.manufactured.updateOne({ id }, { $set: { status: "Repaired", updatedAt: now } });
-        return (0, http_1.ok)(res, { message: "Inverter marked as repaired" });
-    }
-    else if (type === "Spare Part") {
-        const raw = await c.rawMaterials.findOne({ id });
-        if (!raw)
-            return (0, http_1.fail)(res, "Spare part not found", 404);
-        if (!raw.faultyQuantity || raw.faultyQuantity <= 0)
-            return (0, http_1.fail)(res, "No faulty stock available", 400);
-        await c.rawMaterials.updateOne({ id }, { $inc: { faultyQuantity: -1, repairedQuantity: 1 }, $set: { updatedAt: now } });
-        return (0, http_1.ok)(res, { message: "Spare part marked as repaired" });
-    }
-    return (0, http_1.fail)(res, "Invalid type", 400);
 });
 exports.default = router;

@@ -190,10 +190,8 @@ router.get(
   const c = await getCollections();
   const { q = "", status, model, page = "1", limit = "20" } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};
-  if (status) {
+  if (status && status !== "all") {
     filter.status = status;
-  } else {
-    filter.status = { $nin: ["Faulty", "Repaired"] };
   }
   if (model) filter.productId = model;
   if (q) {
@@ -201,7 +199,7 @@ router.get(
   }
 
   const p = Math.max(1, parseInt(page));
-  const l = Math.min(100, parseInt(limit));
+  const l = Math.min(5000, parseInt(limit));
   const total = await c.manufactured.countDocuments(filter);
   const data = await c.manufactured.find(filter).sort({ createdAt: -1 }).skip((p - 1) * l).limit(l).toArray();
   return ok(res, { data, total, page: p, limit: l });
@@ -499,25 +497,41 @@ router.post("/approval-requests/:id/approve", authenticate, requireAnyPermission
   return ok(res, updated);
 });
 
-router.put("/mark-repaired", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+router.put("/mark-repaired", authenticate, requireAnyPermission("inventory:manufactured", "inventory:raw-materials"), async (req: Request, res: Response) => {
   const { type, id } = req.body;
   const c = await getCollections();
   const now = new Date();
 
   if (type === "Inverter") {
-    const mfg = await c.manufactured.findOne({ id });
+    let query: Record<string, any> = { id };
+    if (typeof id === "string" && id.length === 24) {
+      try {
+        const { ObjectId } = require("mongodb");
+        query = { $or: [{ id }, { _id: new ObjectId(id) }, { serialNumber: id }] };
+      } catch (err) {}
+    } else {
+      query = { $or: [{ id }, { serialNumber: id }] };
+    }
+    const mfg = await c.manufactured.findOne(query);
     if (!mfg) return fail(res, "Inverter not found", 404);
-    if (mfg.status !== "Faulty") return fail(res, "Inverter is not faulty", 400);
+    if (mfg.status !== "Faulty" && mfg.status !== "Returned") return fail(res, "Inverter is not faulty or returned", 400);
 
-    await c.manufactured.updateOne({ id }, { $set: { status: "Repaired", updatedAt: now } });
+    await c.manufactured.updateOne({ _id: mfg._id }, { $set: { status: "Repaired", updatedAt: now } });
     return ok(res, { message: "Inverter marked as repaired" });
   } else if (type === "Spare Part") {
-    const raw = await c.rawMaterials.findOne({ id });
+    let query: Record<string, any> = { id };
+    if (typeof id === "string" && id.length === 24) {
+      try {
+        const { ObjectId } = require("mongodb");
+        query = { $or: [{ id }, { _id: new ObjectId(id) }] };
+      } catch (err) {}
+    }
+    const raw = await c.rawMaterials.findOne(query);
     if (!raw) return fail(res, "Spare part not found", 404);
     if (!raw.faultyQuantity || raw.faultyQuantity <= 0) return fail(res, "No faulty stock available", 400);
 
     await c.rawMaterials.updateOne(
-      { id },
+      { _id: raw._id },
       { $inc: { faultyQuantity: -1, repairedQuantity: 1 }, $set: { updatedAt: now } }
     );
     return ok(res, { message: "Spare part marked as repaired" });
@@ -608,14 +622,14 @@ router.post("/:id/return", authenticate, requireAnyPermission("inventory:manufac
   return ok(res, { ...existing, ...update });
 });
 
-router.get("/faulty-returns", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+router.get("/faulty-returns", authenticate, requireAnyPermission("inventory:manufactured", "inventory:raw-materials"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const returnRecords = await c.complaints
     .find({ faultyReturnStatus: { $in: ["Pending", "Received"] } })
     .sort({ updatedAt: -1, createdAt: -1 })
     .toArray();
   const pendingReturns = returnRecords.filter((complaint) => complaint.faultyReturnStatus === "Pending");
-  const faultyInverters = await c.manufactured.find({ status: "Faulty" }).toArray();
+  const faultyInverters = await c.manufactured.find({ status: { $in: ["Faulty", "Returned"] } }).toArray();
   const faultySpares = await c.rawMaterials.find({ faultyQuantity: { $gt: 0 } }).toArray();
   const repairedInverters = await c.manufactured.find({ status: "Repaired" }).toArray();
   const repairedSpares = await c.rawMaterials.find({ repairedQuantity: { $gt: 0 } }).toArray();
@@ -630,7 +644,7 @@ router.get("/faulty-returns", authenticate, requireAnyPermission("inventory:manu
   });
 });
 
-router.put("/faulty-return/:complaintId/receive", authenticate, requireAnyPermission("inventory:manufactured"), async (req: Request, res: Response) => {
+router.put("/faulty-return/:complaintId/receive", authenticate, requireAnyPermission("inventory:manufactured", "inventory:raw-materials"), async (req: Request, res: Response) => {
   const { complaintId } = req.params;
   const c = await getCollections();
   
@@ -645,7 +659,7 @@ router.put("/faulty-return/:complaintId/receive", authenticate, requireAnyPermis
     const mfg = await c.manufactured.findOne({ serialNumber: complaint.faultyReturnItemId });
     if (mfg) {
       await c.manufactured.updateOne(
-        { id: mfg.id }, 
+        { _id: mfg._id }, 
         { $set: { status: "Faulty", returnReason: notes || "Returned from complaint " + complaint.id, updatedAt: now } }
       );
     }
@@ -653,7 +667,7 @@ router.put("/faulty-return/:complaintId/receive", authenticate, requireAnyPermis
     const raw = await c.rawMaterials.findOne({ id: complaint.faultyReturnItemId });
     if (raw) {
       await c.rawMaterials.updateOne(
-        { id: raw.id },
+        { _id: raw._id },
         { $inc: { faultyQuantity: 1 }, $set: { updatedAt: now } }
       );
     }

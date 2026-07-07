@@ -1,4 +1,4 @@
-﻿import express, { type NextFunction, type Request, type Response, type Router } from "express";
+import express, { type NextFunction, type Request, type Response, type Router } from "express";
 import multer from "multer";
 
 import { getCollections } from "../db/collections";
@@ -674,6 +674,8 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     courierDocketAttachmentName,
     courierDocketAttachmentUrl,
     forwardToAccounts,
+    vehicleNo,
+    piItems,
   } = req.body;
 
   const sale = await c.sales.findOne({ id });
@@ -693,7 +695,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     if (dispatchStatus === "Ready" && !isPaymentVerifiedWorkflowStatus(sale.piWorkflowStatus)) {
       return fail(res, "Vehicle no. can only be shared after Accounts verifies payment");
     }
-    if (dispatchStatus === "Ready" && !serialNumber && !sale.serialNumber) {
+    if (dispatchStatus === "Ready" && !vehicleNo && !sale.vehicleNo && !serialNumber && !sale.serialNumber) {
       return fail(res, "Vehicle no. is required before sharing the request with Accounts");
     }
     if (isDeliveryStatus && !isDispatchReadyWorkflowStatus(sale.piWorkflowStatus)) {
@@ -713,38 +715,72 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   }
 
   const update: Partial<Sale> = {};
+  if (vehicleNo !== undefined) {
+    update.vehicleNo = String(vehicleNo).trim();
+  }
+  let allSerials: string[] = [];
+  if (piItems && Array.isArray(piItems)) {
+    // Validate each item
+    for (const item of piItems) {
+      if (item.serialNumbers && Array.isArray(item.serialNumbers)) {
+        const serials = item.serialNumbers.map((s: any) => normalizeSerialNumber(s)).filter(Boolean);
+        if (serials.length > item.quantity) {
+          return fail(res, `Cannot allocate more serial numbers than quantity (${item.quantity}) for ${item.materialName}`);
+        }
+        item.serialNumbers = serials;
+        allSerials.push(...serials);
+      }
+    }
+    
+    // Check for duplicates
+    const uniqueSerials = new Set(allSerials);
+    if (uniqueSerials.size !== allSerials.length) {
+      return fail(res, "Duplicate serial numbers selected");
+    }
+
+    update.piItems = piItems;
+  }
+
   const normalizedSerialNumber = normalizeSerialNumber(serialNumber);
-  if (serialNumber) {
-    update.serialNumber = normalizedSerialNumber;
+  if (allSerials.length === 0 && normalizedSerialNumber) {
+    allSerials = [normalizedSerialNumber];
+  }
+
+  if (allSerials.length > 0) {
+    update.serialNumber = allSerials.join(", ");
 
     if (isDeliveryStatus) {
-      const mfg = await resolveManufacturedProductForSerial(c, sale, normalizedSerialNumber);
-      if (mfg) {
-        if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo) return fail(res, "This product is already sold");
-
-        await c.manufactured.updateOne(
-          { id: mfg.id },
-          {
-            $set: {
-              status: "Sold",
-              invoiceNo: sale.referenceNo,
-              customerId: sale.customerId,
-              soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
-              paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
-              updatedAt: new Date(),
-            },
+      for (const serial of allSerials) {
+        const mfg = await resolveManufacturedProductForSerial(c, sale, serial);
+        if (mfg) {
+          if (mfg.status === "Sold" && mfg.invoiceNo !== sale.referenceNo) {
+            return fail(res, `Product with serial ${serial} is already sold`);
           }
-        );
-        await updateSerialStatus(c, {
-          serialNumber: normalizedSerialNumber,
-          status: "Dispatched",
-        });
-      } else {
-        console.warn("Dispatch finalization skipped manufactured lookup for unmapped serial", {
-          saleId: sale.id,
-          referenceNo: sale.referenceNo,
-          serialNumber: normalizedSerialNumber,
-        });
+
+          await c.manufactured.updateOne(
+            { id: mfg.id },
+            {
+              $set: {
+                status: "Sold",
+                invoiceNo: sale.referenceNo,
+                customerId: sale.customerId,
+                soldDate: confirmedDispatchDate ? new Date(confirmedDispatchDate) : new Date(),
+                paymentStatus: sale.paymentStatus === "Confirmed" ? "Verified" : "Pending",
+                updatedAt: new Date(),
+              },
+            }
+          );
+          await updateSerialStatus(c, {
+            serialNumber: serial,
+            status: "Dispatched",
+          });
+        } else {
+          console.warn("Dispatch finalization skipped manufactured lookup for unmapped serial", {
+            saleId: sale.id,
+            referenceNo: sale.referenceNo,
+            serialNumber: serial,
+          });
+        }
       }
     }
   }
@@ -843,7 +879,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
  * Records a sales workflow entry. If serialNumber is supplied, also marks
  * the manufactured product as Sold for backward-compatible serial sales.
  */
-router.post("/", authenticate, requireAnyPermission("sales:entry"), async (req: Request, res: Response) => {
+router.post("/", authenticate, requireAnyPermission("sales:entry", "dispatch:manage"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const {
     serialNumber,
