@@ -363,6 +363,7 @@ export type SerialEntry = {
 export type Sale = {
   id: string;
   serialNumber?: string;
+  vehicleNo?: string;
   documentType: string;
   referenceNo: string;
   saleDate: Date;

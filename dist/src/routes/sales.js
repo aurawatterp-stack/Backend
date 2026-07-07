@@ -574,7 +574,7 @@ router.put("/:id/sales-dispatch", auth_1.authenticate, (0, auth_1.requireAnyPerm
 router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermission)("dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { id } = req.params;
-    const { serialNumber, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, forwardToAccounts, } = req.body;
+    const { serialNumber, confirmedDispatchDate, dispatchStatus, courierDocketNo, courierDocketAttachmentName, courierDocketAttachmentUrl, forwardToAccounts, vehicleNo, } = req.body;
     const sale = await c.sales.findOne({ id });
     if (!sale)
         return (0, http_1.fail)(res, "PI record not found", 404);
@@ -593,7 +593,7 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
         if (dispatchStatus === "Ready" && !isPaymentVerifiedWorkflowStatus(sale.piWorkflowStatus)) {
             return (0, http_1.fail)(res, "Vehicle no. can only be shared after Accounts verifies payment");
         }
-        if (dispatchStatus === "Ready" && !serialNumber && !sale.serialNumber) {
+        if (dispatchStatus === "Ready" && !vehicleNo && !sale.vehicleNo && !serialNumber && !sale.serialNumber) {
             return (0, http_1.fail)(res, "Vehicle no. is required before sharing the request with Accounts");
         }
         if (isDeliveryStatus && !isDispatchReadyWorkflowStatus(sale.piWorkflowStatus)) {
@@ -611,6 +611,9 @@ router.put("/:id/dispatch-team", auth_1.authenticate, (0, auth_1.requireAnyPermi
         return (0, http_1.fail)(res, "PI attachment is required before forwarding to Accounts");
     }
     const update = {};
+    if (vehicleNo !== undefined) {
+        update.vehicleNo = String(vehicleNo).trim();
+    }
     const normalizedSerialNumber = normalizeSerialNumber(serialNumber);
     if (serialNumber) {
         update.serialNumber = normalizedSerialNumber;

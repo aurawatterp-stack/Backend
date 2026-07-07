@@ -674,6 +674,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     courierDocketAttachmentName,
     courierDocketAttachmentUrl,
     forwardToAccounts,
+    vehicleNo,
   } = req.body;
 
   const sale = await c.sales.findOne({ id });
@@ -693,7 +694,7 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
     if (dispatchStatus === "Ready" && !isPaymentVerifiedWorkflowStatus(sale.piWorkflowStatus)) {
       return fail(res, "Vehicle no. can only be shared after Accounts verifies payment");
     }
-    if (dispatchStatus === "Ready" && !serialNumber && !sale.serialNumber) {
+    if (dispatchStatus === "Ready" && !vehicleNo && !sale.vehicleNo && !serialNumber && !sale.serialNumber) {
       return fail(res, "Vehicle no. is required before sharing the request with Accounts");
     }
     if (isDeliveryStatus && !isDispatchReadyWorkflowStatus(sale.piWorkflowStatus)) {
@@ -713,6 +714,9 @@ router.put("/:id/dispatch-team", authenticate, requireAnyPermission("dispatch:ma
   }
 
   const update: Partial<Sale> = {};
+  if (vehicleNo !== undefined) {
+    update.vehicleNo = String(vehicleNo).trim();
+  }
   const normalizedSerialNumber = normalizeSerialNumber(serialNumber);
   if (serialNumber) {
     update.serialNumber = normalizedSerialNumber;
