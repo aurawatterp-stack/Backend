@@ -10,7 +10,7 @@ import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 import { updateSerialStatus } from "../utils/serialLifecycle";
-import { resolveAssignmentByStateDistrict, listL1TeamForL2 } from "../services/engineerAssignments";
+import { resolveAssignmentByStateDistrict, listL1TeamForL2, findEngineerMasterForUser } from "../services/engineerAssignments";
 import { recordTicketAssignmentLog, routeCustomerTicketByStateDistrict, refreshTicketLoadForAssignment } from "../services/ticketRouting";
 import {
   ACTIVE_COMPLAINT_DUPLICATE_MESSAGE,
@@ -788,9 +788,15 @@ function requireComplaintTypeAccess(user: AuthUser, type: string): boolean {
 
 async function complaintRoleScope(user: AuthUser): Promise<Record<string, unknown> | null> {
   if (user.role === "L1 Engineer") {
+    // Assignment/reassignment always writes assignedEngineerId from the engineerMasters
+    // directory (see buildServiceAssignment), never the real auth user id, and
+    // assignedEngineerName is only reliable if it matches user.name byte-for-byte. Resolve
+    // this engineer's own directory record so directory-id matching also works.
+    const ownMaster = await findEngineerMasterForUser(user, "L1");
     return {
       $or: [
         { assignedEngineerId: user.userId },
+        ...(ownMaster ? [{ assignedEngineerId: ownMaster.id }] : []),
         ...(user.name ? [{ assignedEngineerName: user.name }] : []),
         { siteVisitRequired: true, siteVisitEngineerId: user.userId },
         ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
@@ -802,9 +808,11 @@ async function complaintRoleScope(user: AuthUser): Promise<Record<string, unknow
   }
 
   if (user.role === "Backup") {
+    const ownMaster = await findEngineerMasterForUser(user, "L1");
     return {
       $or: [
         { assignedEngineerId: user.userId },
+        ...(ownMaster ? [{ assignedEngineerId: ownMaster.id }] : []),
         ...(user.name ? [{ assignedEngineerName: user.name }] : []),
         { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
       ],
@@ -854,21 +862,20 @@ async function applyComplaintRoleScope(filter: Record<string, unknown>, user: Au
 
 async function canAccessComplaint(user: AuthUser, complaint: Complaint): Promise<boolean> {
   if (!requireComplaintTypeAccess(user, String(complaint.type))) return false;
-  if (user.role === "L1 Engineer") {
-    return (
+  if (user.role === "L1 Engineer" || user.role === "Backup") {
+    const ownMaster = await findEngineerMasterForUser(user, "L1");
+    const ownMatch = (
       complaint.assignedEngineerId === user.userId ||
+      (Boolean(ownMaster) && complaint.assignedEngineerId === ownMaster!.id) ||
       (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
-      (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-      (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
-      (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
       (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1")
     );
-  }
-  if (user.role === "Backup") {
+    if (user.role === "Backup") return ownMatch;
     return (
-      complaint.assignedEngineerId === user.userId ||
-      (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
-      (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1")
+      ownMatch ||
+      (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
+      (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
+      (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name)))
     );
   }
   if (user.role === "L2 Technical Team") {
@@ -1604,9 +1611,9 @@ router.put(
       if (user.role === "L2 Technical Team" && level !== "L1") {
         return fail(res, "L2 engineers can only reassign tickets to L1 engineers.", 403);
       }
-      const candidates = user.role === "L2 Technical Team"
-        ? await listL1TeamForL2(user)
-        : await serviceEngineers(level);
+      // L2 can reassign to any L1 engineer, not just the ones mapped to their own
+      // district team — the team mapping only scopes which tickets an L2 sees.
+      const candidates = await serviceEngineers(level);
       const target = candidates.find((candidate) => candidate.id === requestedAssignToId);
       if (!target) return fail(res, "Selected engineer not found", 404);
       const counts = await engineerTicketCounts(target.id, target.name, existing.id);
@@ -1883,14 +1890,24 @@ router.put(
     }
 
     const setDoc: Record<string, unknown> = stripUndefinedFields({ ...update });
+    // Fields explicitly set to `undefined` above (e.g. slaDueAt/slaStartedAt on a fresh
+    // reassignment) are meant to be cleared, not left untouched — $set silently ignores
+    // undefined values, so those clears must go through $unset instead.
+    const unsetDoc: Record<string, ""> = {};
+    for (const [key, value] of Object.entries(update)) {
+      if (value === undefined) unsetDoc[key] = "";
+    }
     if (nextSerialKey) {
       setDoc.productSerialNoKey = nextSerialKey;
     }
     const updateDoc: Record<string, unknown> = workflowHistory.length
       ? { $set: setDoc, $push: { workflowHistory: { $each: workflowHistory } } }
       : { $set: setDoc };
+    if (Object.keys(unsetDoc).length) {
+      updateDoc.$unset = { ...(updateDoc.$unset as Record<string, string> | undefined), ...unsetDoc };
+    }
     if (isClosed) {
-      updateDoc.$unset = { productSerialNoKey: "" };
+      updateDoc.$unset = { ...(updateDoc.$unset as Record<string, string> | undefined), productSerialNoKey: "" };
     }
 
     await c.complaints.updateOne({ id }, updateDoc as any);
