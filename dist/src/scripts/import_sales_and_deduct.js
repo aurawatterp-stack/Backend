@@ -32,185 +32,350 @@ var __importStar = (this && this.__importStar) || (function () {
         return result;
     };
 })();
+var __importDefault = (this && this.__importDefault) || function (mod) {
+    return (mod && mod.__esModule) ? mod : { "default": mod };
+};
 Object.defineProperty(exports, "__esModule", { value: true });
+const node_path_1 = __importDefault(require("node:path"));
 const xlsx = __importStar(require("xlsx"));
 const collections_1 = require("../db/collections");
-const serialLifecycle_1 = require("../utils/serialLifecycle");
 const id_1 = require("../utils/id");
-const dotenv = __importStar(require("dotenv"));
-dotenv.config();
+const DEFAULT_EXCEL_PATH = "D:/bma/Aurawat/Aurawatt_15Mar2026_to_Last_Verified.xlsx";
 function normalizeKey(value) {
     return String(value ?? "").trim().toLowerCase().replace(/[^a-z0-9]+/g, " ").replace(/\s+/g, " ").trim();
+}
+function normalizeComparable(value) {
+    return normalizeKey(value).replace(/\s+/g, "");
+}
+function pickField(data, aliases) {
+    for (const alias of aliases) {
+        const value = data[normalizeKey(alias)];
+        if (value !== undefined && value !== null && String(value).trim() !== "")
+            return value;
+    }
+    return undefined;
+}
+function resolveExcelPaths() {
+    const args = process.argv.slice(2).filter((arg) => arg && !arg.startsWith("-"));
+    if (args.length)
+        return args;
+    if (process.env.SALES_EXCEL_PATH) {
+        return process.env.SALES_EXCEL_PATH
+            .split(",")
+            .map((value) => value.trim())
+            .filter(Boolean);
+    }
+    return [DEFAULT_EXCEL_PATH];
+}
+function readWorkbookRows(excelPath) {
+    const workbook = xlsx.readFile(excelPath, { cellDates: false, cellNF: false, cellHTML: false });
+    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rows = xlsx.utils.sheet_to_json(worksheet, { header: 1, defval: "", blankrows: false });
+    if (!rows.length)
+        return [];
+    const headers = rows[0].map((header) => normalizeKey(header));
+    console.log(`${node_path_1.default.basename(excelPath)} headers:`, headers);
+    return rows.slice(1).map((row, index) => {
+        const data = {};
+        headers.forEach((header, cellIndex) => {
+            if (header)
+                data[header] = row[cellIndex];
+        });
+        return { rowNumber: index + 2, data };
+    });
+}
+function parseExcelDate(value) {
+    if (value instanceof Date && !Number.isNaN(value.getTime()))
+        return value;
+    if (typeof value === "number" && Number.isFinite(value)) {
+        const parsed = xlsx.SSF.parse_date_code(value);
+        if (parsed)
+            return new Date(Date.UTC(parsed.y, parsed.m - 1, parsed.d));
+        return new Date((value - 25569) * 86400 * 1000);
+    }
+    const text = String(value ?? "").trim();
+    if (!text)
+        return new Date();
+    const parsed = new Date(text);
+    if (!Number.isNaN(parsed.getTime()))
+        return parsed;
+    return new Date();
+}
+function inferBatteryModelFromSerial(serialNumber) {
+    const serial = serialNumber.toUpperCase();
+    if (serial.startsWith("AW-LFP-256") || serial.startsWith("AW-LFP-25.6"))
+        return "AW-LFP-25.6";
+    if (serial.startsWith("AW-LFP-51.2"))
+        return "AW-LFP-51.2";
+    if (serial.startsWith("AW-LFP-48-60"))
+        return "AW-LFP-48-60";
+    if (serial.startsWith("AW-LFP-48-70"))
+        return "AW-LFP-48-70";
+    return "";
+}
+function normalizeModelName(modelType, serialNumber) {
+    const model = modelType.trim();
+    const comparable = normalizeComparable(model);
+    if (!model)
+        return inferBatteryModelFromSerial(serialNumber);
+    if (comparable.includes("lvlfp48v70ah"))
+        return "AW-LFP-48-70";
+    if (comparable.includes("lvlfp48v60ah"))
+        return "AW-LFP-48-60";
+    if (comparable.includes("lvlfp51.2v100ah") || comparable.includes("lvlfp512v100ah"))
+        return "AW-LFP-51.2";
+    if (comparable.includes("lvlfp25.6v100ah") || comparable.includes("lvlfp256v100ah"))
+        return "AW-LFP-25.6";
+    if (comparable.includes("lvlfp240v52ah") || comparable.includes("240v52ah"))
+        return "AW-LFP-240-52";
+    if (comparable.includes("hvlfp153.6v100ah") || comparable.includes("1536v100ah"))
+        return "AW-LFP-153.6";
+    return model;
+}
+function inferSeriesForModel(model) {
+    const upper = model.toUpperCase();
+    if (upper.startsWith("AW-SP"))
+        return "SP SERIES";
+    if (upper.startsWith("AW-TP"))
+        return "TP SERIES";
+    if (upper.includes("25.6"))
+        return "AURAWATT LFP SERIES(25.6V/100AH)";
+    if (upper.includes("48-60"))
+        return "AURAWATT LFP SERIES(48V/60AH)";
+    if (upper.includes("48-70"))
+        return "AURAWATT LFP SERIES(48V/70AH)";
+    if (upper.includes("51.2"))
+        return "AURAWATT LFP SERIES(51.2V/100AH)";
+    if (upper.includes("240-52"))
+        return "AURAWATT LFP SERIES(12.4KW/240V/52AH)";
+    if (upper.includes("153.6"))
+        return "AURAWATT LFP SERIES(153.6V/100AH)";
+    return "Imported Sales Products";
+}
+function cacheProduct(cache, product) {
+    cache.productsByKey.set(normalizeComparable(product.model), product);
+    cache.productsByKey.set(normalizeComparable(product.series), product);
+}
+async function loadCaches(c) {
+    const [customers, products, manufactured] = await Promise.all([
+        c.customers.find({}, { projection: { id: 1, name: 1 } }).toArray(),
+        c.products.find({}, { projection: { id: 1, series: 1, model: 1, hsnSac: 1, gstRate: 1, dealerPrice: 1, distributorPrice: 1, createdAt: 1 } }).toArray(),
+        c.manufactured.find({}, { projection: { id: 1, serialNumber: 1 } }).toArray(),
+    ]);
+    const cache = {
+        customersByName: new Map(),
+        productsByKey: new Map(),
+        manufacturedIdsBySerial: new Map(),
+    };
+    for (const customer of customers)
+        cache.customersByName.set(normalizeComparable(customer.name), customer);
+    for (const product of products)
+        cacheProduct(cache, product);
+    for (const item of manufactured) {
+        if (item.serialNumber)
+            cache.manufacturedIdsBySerial.set(String(item.serialNumber).trim(), item.id);
+    }
+    console.log(`Cached ${customers.length} customers, ${products.length} products, ${manufactured.length} manufactured serials.`);
+    return cache;
+}
+async function resolveProduct(c, cache, rawModelType, serialNumber) {
+    const model = normalizeModelName(rawModelType, serialNumber);
+    if (!model)
+        throw new Error("missing model");
+    const normalized = normalizeComparable(model);
+    const cached = cache.productsByKey.get(normalized);
+    if (cached)
+        return cached;
+    const now = new Date();
+    const product = {
+        id: (0, id_1.generateId)(),
+        series: inferSeriesForModel(model),
+        model,
+        hsnSac: model.startsWith("AW-LFP") ? "8507" : "8504",
+        gstRate: model.startsWith("AW-LFP") ? 18 : 5,
+        dealerPrice: 0,
+        distributorPrice: 0,
+        createdAt: now,
+    };
+    await c.products.insertOne(product);
+    cacheProduct(cache, product);
+    console.log(`Created missing product '${product.model}' (${product.series})`);
+    return product;
+}
+async function upsertCustomer(c, cache, customerName) {
+    const key = normalizeComparable(customerName);
+    const cached = cache.customersByName.get(key);
+    if (cached)
+        return cached;
+    const now = new Date();
+    const customer = {
+        id: (0, id_1.generateId)(),
+        name: customerName,
+        type: "Distributor",
+        phone: "0000000000",
+        status: "Active",
+        createdAt: now,
+        updatedAt: now,
+    };
+    await c.customers.insertOne(customer);
+    cache.customersByName.set(key, customer);
+    console.log(`Created new customer '${customerName}'`);
+    return customer;
+}
+async function deductRawMaterialsForSale(c, product, saleId, serialNumber) {
+    const bom = await c.boms.findOne({ series: product.series });
+    if (!bom?.items?.length) {
+        console.log(`Warning: no BOM found for series '${product.series}'`);
+        return;
+    }
+    for (const item of bom.items) {
+        let requiredQty = item.quantity;
+        const rmBatches = await c.rawMaterials
+            .find({ materialName: item.materialName, quantityAvailable: { $gt: 0 } })
+            .sort({ dateReceived: 1 })
+            .toArray();
+        let batchIdx = 0;
+        while (requiredQty > 0 && batchIdx < rmBatches.length) {
+            const batch = rmBatches[batchIdx];
+            const deductAmt = Math.min(requiredQty, batch.quantityAvailable);
+            await c.rawMaterials.updateOne({ id: batch.id }, {
+                $inc: { quantityAvailable: -deductAmt },
+                $set: { updatedAt: new Date() },
+            });
+            await c.inventoryLogs.insertOne({
+                id: (0, id_1.generateId)(),
+                type: "Sales Dispatch",
+                itemId: batch.id,
+                itemName: batch.materialName,
+                quantityChange: -deductAmt,
+                referenceId: saleId,
+                notes: `Deducted for sale of ${product.model} (S No: ${serialNumber || "N/A"})`,
+                createdAt: new Date(),
+                createdBy: "system_migration",
+            });
+            requiredQty -= deductAmt;
+            batchIdx += 1;
+        }
+        if (requiredQty > 0) {
+            console.log(`Warning: not enough inventory for RM '${item.materialName}'. Short by ${requiredQty}.`);
+        }
+    }
 }
 async function run() {
     const c = await (0, collections_1.getCollections)();
     console.log("Connected to MongoDB!");
-    // 1. Delete Demo Data
+    const resetSales = String(process.env.RESET_SALES_COLLECTION ?? "true").toLowerCase() !== "false";
+    const deductRawMaterials = String(process.env.DEDUCT_RAW_MATERIALS ?? "false").toLowerCase() === "true";
+    if (resetSales) {
+        const cleared = await c.sales.deleteMany({});
+        console.log(`Cleared ${cleared.deletedCount} existing sales record(s).`);
+    }
     const demoPrefixes = [/^Acme Distributors/, /^Global Traders/, /^Southern Supplies/];
     for (const prefix of demoPrefixes) {
-        const res1 = await c.customers.deleteMany({ name: { $regex: prefix } });
-        const res2 = await c.pendingCustomerRegistrations.deleteMany({ name: { $regex: prefix } });
-        console.log(`Deleted ${res1.deletedCount} customers and ${res2.deletedCount} pending requests matching ${prefix}`);
+        const customers = await c.customers.deleteMany({ name: { $regex: prefix } });
+        const pending = await c.pendingCustomerRegistrations.deleteMany({ name: { $regex: prefix } });
+        console.log(`Deleted ${customers.deletedCount} customers and ${pending.deletedCount} pending requests matching ${prefix}`);
     }
-    // 2. Read Excel Data
-    const excelPath = "d:/bma/Aurawat/Aurawatt_15Mar2026_to_Last_Verified.xlsx";
-    const workbook = xlsx.readFile(excelPath);
-    const worksheet = workbook.Sheets[workbook.SheetNames[0]];
-    const rows = xlsx.utils.sheet_to_json(worksheet, { header: 1 });
-    if (!rows.length) {
-        console.log("No data found in Excel");
-        process.exit(0);
-    }
-    const headers = rows[0].map(h => normalizeKey(h));
-    console.log("Parsed Headers:", headers);
     let salesAdded = 0;
     let rowsSkipped = 0;
-    for (let i = 1; i < rows.length; i++) {
-        const row = rows[i];
-        const data = {};
-        headers.forEach((h, idx) => {
-            data[h] = row[idx];
-        });
-        const customerName = String(data["customers info"] ?? "").trim();
-        const serialNumber = String(data["s no"] ?? "").trim();
-        const modelType = String(data["model type"] ?? "").trim();
-        const rawSaleDate = data["sales date"];
-        const documentType = String(data["document type ti"] ?? "TI").trim();
-        const refNo = String(data["ref no"] ?? "").trim();
-        if (!customerName || !modelType) {
-            rowsSkipped++;
-            console.log(`Row ${i} skipped: Missing Customer Name or Model Type`);
+    let blankRowsSkipped = 0;
+    let manufacturedLinked = 0;
+    let missingManufactured = 0;
+    const cache = await loadCaches(c);
+    for (const excelPath of resolveExcelPaths()) {
+        console.log(`\nImporting ${excelPath}`);
+        const rows = readWorkbookRows(excelPath);
+        if (!rows.length) {
+            console.log("No data found in Excel");
             continue;
         }
-        // A. Match Customer strictly or CREATE if missing
-        let customer = await c.customers.findOne({ name: { $regex: new RegExp(`^${customerName}$`, "i") } });
-        if (!customer) {
-            const newCustomer = {
-                id: (0, id_1.generateId)(),
-                name: customerName,
-                type: "Distributor",
-                phone: "0000000000",
-                status: "Active",
+        for (const { rowNumber, data } of rows) {
+            const customerName = String(pickField(data, ["customers info", "customer name", "customer_name"]) ?? "").trim();
+            const serialNumber = String(pickField(data, ["s no", "serial number", "serial_number"]) ?? "").trim();
+            const rawModelType = String(pickField(data, ["model type", "model_type", "model number", "model_number"]) ?? "").trim();
+            const rawSaleDate = pickField(data, ["sales date", "sales_date", "sale date"]);
+            const documentType = String(pickField(data, ["document type ti", "document type", "document_type"]) ?? "TI").trim() || "TI";
+            const referenceNo = String(pickField(data, ["ref no", "invoice no", "invoice_no", "reference no"]) ?? "").trim();
+            if (!customerName && !serialNumber && !rawModelType && !referenceNo && !rawSaleDate) {
+                blankRowsSkipped += 1;
+                continue;
+            }
+            const modelType = normalizeModelName(rawModelType, serialNumber);
+            if (!customerName || !modelType) {
+                rowsSkipped += 1;
+                console.log(`Row ${rowNumber} skipped: missing customer or model (customer='${customerName}', model='${rawModelType}', serial='${serialNumber}')`);
+                continue;
+            }
+            const customer = await upsertCustomer(c, cache, customerName);
+            const product = await resolveProduct(c, cache, modelType, serialNumber);
+            const saleDate = parseExcelDate(rawSaleDate);
+            const saleId = (0, id_1.generateId)();
+            await c.sales.insertOne({
+                id: saleId,
+                saleDate,
+                serialNumber: serialNumber || undefined,
+                documentType,
+                referenceNo: referenceNo || `IMPORT-${saleId}`,
+                customerId: customer.id,
+                customerName: customer.name,
+                materialName: product.model,
+                quantity: 1,
+                dealerRegistered: true,
+                inventoryStatus: "Available",
+                priceCategory: "Dealer Price",
+                createdBy: "system_migration",
                 createdAt: new Date(),
-                updatedAt: new Date(),
-            };
-            await c.customers.insertOne(newCustomer);
-            customer = newCustomer;
-            console.log(`Row ${i}: Created new customer '${customerName}'`);
-        }
-        // B. Match Product to get Series
-        let product = await c.products.findOne({ model: { $regex: new RegExp(`^${modelType}$`, "i") } });
-        if (!product) {
-            // Fallback to series match if exact model is missing
-            product = await c.products.findOne({ series: { $regex: new RegExp(`^${modelType}`, "i") } });
-        }
-        if (!product) {
-            rowsSkipped++;
-            console.log(`Row ${i} skipped: Product/Model '${modelType}' not found in DB`);
-            continue;
-        }
-        // Parse Excel date (serial format)
-        let saleDate = new Date();
-        if (typeof rawSaleDate === "number") {
-            saleDate = new Date((rawSaleDate - (25567 + 2)) * 86400 * 1000); // Excel to JS date
-        }
-        // C. Create Sale Entry
-        const saleId = (0, id_1.generateId)();
-        await c.sales.insertOne({
-            id: saleId,
-            saleDate,
-            serialNumber: serialNumber || undefined,
-            documentType,
-            referenceNo: refNo,
-            customerId: customer.id,
-            customerName: customer.name,
-            materialName: product.model,
-            quantity: 1, // default
-            createdBy: "system_migration",
-            createdAt: new Date(),
-            paymentStatus: "Confirmed",
-            dispatchStatus: "Dispatched",
-            piWorkflowStatus: "Dispatched",
-            piItems: [
-                {
-                    materialName: product.model,
-                    hsnSac: product.hsnSac || "8504",
-                    quantity: 1,
-                    rate: product.dealerPrice || 0,
-                    gstRate: product.gstRate || 0
-                }
-            ]
-        });
-        salesAdded++;
-        // D. Update Serial Status
-        if (serialNumber) {
-            const mfg = await c.manufactured.findOne({ serialNumber });
-            if (mfg) {
-                await c.manufactured.updateOne({ id: mfg.id }, {
-                    $set: {
-                        status: "Sold",
-                        invoiceNo: refNo,
-                        customerId: customer.id,
-                        soldDate: saleDate,
-                        paymentStatus: "Verified",
-                        updatedAt: new Date()
-                    }
-                });
-                await (0, serialLifecycle_1.updateSerialStatus)(c, {
-                    serialNumber,
-                    status: "Sold"
-                });
-            }
-            else {
-                console.log(`Row ${i} warning: Serial '${serialNumber}' not found in manufactured inventory`);
-            }
-        }
-        // E. Deduct Raw Materials based on BOM
-        const bom = await c.boms.findOne({ series: product.series });
-        if (bom && bom.items && bom.items.length > 0) {
-            for (const item of bom.items) {
-                let requiredQty = item.quantity;
-                // Find raw material batches sorted by oldest first
-                const rmBatches = await c.rawMaterials.find({
-                    materialName: item.materialName,
-                    quantityAvailable: { $gt: 0 }
-                }).sort({ dateReceived: 1 }).toArray();
-                let batchIdx = 0;
-                while (requiredQty > 0 && batchIdx < rmBatches.length) {
-                    const batch = rmBatches[batchIdx];
-                    const deductAmt = Math.min(requiredQty, batch.quantityAvailable);
-                    await c.rawMaterials.updateOne({ id: batch.id }, {
-                        $inc: { quantityAvailable: -deductAmt },
-                        $set: { updatedAt: new Date() }
+                paymentStatus: "Confirmed",
+                dispatchStatus: "Dispatched",
+                piWorkflowStatus: "Dispatched",
+                piItems: [
+                    {
+                        materialName: product.model,
+                        hsnSac: product.hsnSac || (product.model.startsWith("AW-LFP") ? "8507" : "8504"),
+                        quantity: 1,
+                        rate: product.dealerPrice || 0,
+                        gstRate: product.gstRate || 0,
+                        serialNumbers: serialNumber ? [serialNumber] : undefined,
+                    },
+                ],
+            });
+            salesAdded += 1;
+            if (serialNumber) {
+                const manufacturedId = cache.manufacturedIdsBySerial.get(serialNumber);
+                if (manufacturedId) {
+                    await c.manufactured.updateOne({ id: manufacturedId }, {
+                        $set: {
+                            productId: product.id,
+                            status: "Sold",
+                            invoiceNo: referenceNo,
+                            customerId: customer.id,
+                            soldDate: saleDate,
+                            paymentStatus: "Verified",
+                            updatedAt: new Date(),
+                        },
                     });
-                    // Log the deduction
-                    await c.inventoryLogs.insertOne({
-                        id: (0, id_1.generateId)(),
-                        type: "Sales Dispatch",
-                        itemId: batch.id,
-                        itemName: batch.materialName,
-                        quantityChange: -deductAmt,
-                        referenceId: saleId,
-                        notes: `Deducted for sale of ${product.model} (S No: ${serialNumber || 'N/A'})`,
-                        createdAt: new Date(),
-                        createdBy: "system_migration"
-                    });
-                    requiredQty -= deductAmt;
-                    batchIdx++;
+                    await c.serials.updateOne({ serialNumber }, { $set: { status: "Sold" } });
+                    manufacturedLinked += 1;
                 }
-                if (requiredQty > 0) {
-                    console.log(`Row ${i} warning: Not enough inventory for RM '${item.materialName}'. Short by ${requiredQty}.`);
+                else {
+                    missingManufactured += 1;
                 }
             }
-        }
-        else {
-            console.log(`Row ${i} warning: No BOM found for series '${product.series}'`);
+            if (deductRawMaterials) {
+                await deductRawMaterialsForSale(c, product, saleId, serialNumber);
+            }
         }
     }
-    console.log(`Migration Complete! Sales added: ${salesAdded}, Rows skipped: ${rowsSkipped}`);
+    console.log("\nMigration complete!");
+    console.log(`Sales added: ${salesAdded}`);
+    console.log(`Rows skipped: ${rowsSkipped}`);
+    console.log(`Blank rows skipped: ${blankRowsSkipped}`);
+    console.log(`Manufactured serials linked: ${manufacturedLinked}`);
+    console.log(`Missing manufactured serials: ${missingManufactured}`);
+    console.log(`Raw material deduction: ${deductRawMaterials ? "enabled" : "disabled"}`);
     process.exit(0);
 }
-run().catch(err => {
+run().catch((err) => {
     console.error("Migration Error:", err);
     process.exit(1);
 });

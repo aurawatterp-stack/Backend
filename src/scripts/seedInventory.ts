@@ -233,6 +233,9 @@ async function main() {
   let customersUpserted = 0;
   let duplicatesSkipped = 0;
 
+  const clearedSales = await c.sales.deleteMany({});
+  console.log(`Cleared ${clearedSales.deletedCount} existing sales record(s) before demo reseed.`);
+
   for (const demoProduct of demoProducts) {
     const product = await upsertProduct(demoProduct);
     productsReady += 1;
