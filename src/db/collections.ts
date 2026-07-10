@@ -10,6 +10,7 @@ import type {
   ManufacturedProduct,
   PendingRegistration,
   PendingCustomerRegistration,
+  PriceEntry,
   Product,
   RawMaterial,
   Sale,
@@ -41,6 +42,7 @@ export type Collections = {
   pendingCustomerRegistrations: Collection<PendingCustomerRegistration>;
   customers: Collection<Customer>;
   products: Collection<Product>;
+  priceEntries: Collection<PriceEntry>;
   rawMaterials: Collection<RawMaterial>;
   manufactured: Collection<ManufacturedProduct>;
   serials: Collection<SerialEntry>;
@@ -71,6 +73,7 @@ export async function getCollections(): Promise<Collections> {
     pendingCustomerRegistrations: db.collection<PendingCustomerRegistration>("pending_customer_registrations"),
     customers: db.collection<Customer>("customers"),
     products: db.collection<Product>("products"),
+    priceEntries: db.collection<PriceEntry>("price_entries"),
     rawMaterials: db.collection<RawMaterial>("raw_materials"),
     manufactured: db.collection<ManufacturedProduct>("manufactured"),
     serials: db.collection<SerialEntry>("serials"),

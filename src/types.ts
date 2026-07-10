@@ -30,7 +30,8 @@ export type Permission =
   | "dispatch:manage"
   | "accounts:manage"
   | "complaints:consumer"
-  | "complaints:supplier";
+  | "complaints:supplier"
+  | "pricing:manage";
 
 export type JwtPayload = {
   userId: string;
@@ -245,6 +246,25 @@ export type Product = {
   dealerPrice?: number;
   distributorPrice?: number;
   createdAt: Date;
+};
+
+export type PriceStateName = "UP" | "Bihar" | "MP" | "Haryana" | "Rajasthan" | "Punjab";
+
+export type PriceStatePoint = {
+  distributor: number;
+  dealer: number;
+  msp: number;
+};
+
+export type PriceEntry = {
+  id: string;
+  srNo?: number;
+  description: string;
+  modelNo: string;
+  modelKey: string;
+  prices: Record<PriceStateName, PriceStatePoint>;
+  createdAt: Date;
+  updatedAt: Date;
 };
 
 export type BOMItem = {

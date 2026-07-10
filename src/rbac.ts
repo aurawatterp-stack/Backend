@@ -16,6 +16,7 @@ export const ALL_PERMISSIONS: Permission[] = [
   "accounts:manage",
   "complaints:consumer",
   "complaints:supplier",
+  "pricing:manage",
 ];
 
 export const SYSTEM_ROLES: SystemRoleName[] = [
