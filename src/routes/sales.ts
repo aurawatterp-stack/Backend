@@ -227,8 +227,8 @@ router.get("/", authenticate, requireAnyPermission("sales:entry", "dispatch:mana
   const p = Math.max(1, parseInt(page));
   const l = Math.min(100, parseInt(limit));
   const sortSpec: Record<string, 1 | -1> = sort === "accountsQueue"
-    ? { accountsRequestAt: -1 as const, createdAt: -1 as const, saleDate: -1 as const }
-    : { saleDate: -1 as const };
+    ? { accountsRequestAt: -1 as const, createdAt: -1 as const, saleDate: -1 as const, id: 1 as const }
+    : { saleDate: -1 as const, id: 1 as const };
   const canSeeAllSales = user.role === "Admin" || user.permissions.includes("dispatch:manage") || user.permissions.includes("accounts:manage");
   const filter = canSeeAllSales ? {} : { $or: [{ createdBy: user.userId }, { "piWorkflowHistory.0.by": user.userId }] };
   const total = await c.sales.countDocuments(filter);

@@ -195,8 +195,8 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:ent
     const p = Math.max(1, parseInt(page));
     const l = Math.min(100, parseInt(limit));
     const sortSpec = sort === "accountsQueue"
-        ? { accountsRequestAt: -1, createdAt: -1, saleDate: -1 }
-        : { saleDate: -1 };
+        ? { accountsRequestAt: -1, createdAt: -1, saleDate: -1, id: 1 }
+        : { saleDate: -1, id: 1 };
     const canSeeAllSales = user.role === "Admin" || user.permissions.includes("dispatch:manage") || user.permissions.includes("accounts:manage");
     const filter = canSeeAllSales ? {} : { $or: [{ createdBy: user.userId }, { "piWorkflowHistory.0.by": user.userId }] };
     const total = await c.sales.countDocuments(filter);

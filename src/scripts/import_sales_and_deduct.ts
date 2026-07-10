@@ -99,6 +99,20 @@ function inferBatteryModelFromSerial(serialNumber: string) {
   return "";
 }
 
+// 51.2V batteries share one description in the sheets but are actually 4 distinct BOM
+// variants, distinguishable only by serial number suffix/prefix:
+//   - contains "/0.5-"  -> "i" variant
+//   - ends with "-10"   -> "10" variant
+//   - ends with "-5"    -> "5" variant
+//   - otherwise         -> "L" variant (plain serials, 16-Dec-2025..20-Mar-2026 batch)
+function classify512Variant(serialNumber: string) {
+  const s = (serialNumber || "").trim().toUpperCase();
+  if (s.includes("/0.5")) return "i";
+  if (/-10$/.test(s)) return "10";
+  if (/-5$/.test(s)) return "5";
+  return "L";
+}
+
 function normalizeModelName(modelType: string, serialNumber: string) {
   const model = modelType.trim();
   const comparable = normalizeComparable(model);
@@ -106,7 +120,13 @@ function normalizeModelName(modelType: string, serialNumber: string) {
   if (!model) return inferBatteryModelFromSerial(serialNumber);
   if (comparable.includes("lvlfp48v70ah")) return "AW-LFP-48-70";
   if (comparable.includes("lvlfp48v60ah")) return "AW-LFP-48-60";
-  if (comparable.includes("lvlfp51.2v100ah") || comparable.includes("lvlfp512v100ah")) return "AW-LFP-51.2";
+  if (comparable.includes("lvlfp51.2v100ah") || comparable.includes("lvlfp512v100ah")) {
+    const variant = classify512Variant(serialNumber);
+    if (variant === "i") return "AW-LFP-51.2-i";
+    if (variant === "10") return "AW-LFP-51.2 - 10";
+    if (variant === "5") return "AW-LFP-51.2 - 5";
+    return "AW-LFP-51.2 - L";
+  }
   if (comparable.includes("lvlfp25.6v100ah") || comparable.includes("lvlfp256v100ah")) return "AW-LFP-25.6";
   if (comparable.includes("lvlfp240v52ah") || comparable.includes("240v52ah")) return "AW-LFP-240-52";
   if (comparable.includes("hvlfp153.6v100ah") || comparable.includes("1536v100ah")) return "AW-LFP-153.6";
@@ -121,7 +141,11 @@ function inferSeriesForModel(model: string) {
   if (upper.includes("25.6")) return "AURAWATT LFP SERIES(25.6V/100AH)";
   if (upper.includes("48-60")) return "AURAWATT LFP SERIES(48V/60AH)";
   if (upper.includes("48-70")) return "AURAWATT LFP SERIES(48V/70AH)";
-  if (upper.includes("51.2")) return "AURAWATT LFP SERIES(51.2V/100AH)";
+  if (upper.includes("51.2")) {
+    if (upper.includes("-I")) return "AURAWATT LFP SERIES(51.2V/100AH) - i";
+    if (upper.includes("- L")) return "AURAWATT LFP SERIES(51.2V/100AH) - L";
+    return "AURAWATT LFP SERIES(51.2V/100AH) - 5/10";
+  }
   if (upper.includes("240-52")) return "AURAWATT LFP SERIES(12.4KW/240V/52AH)";
   if (upper.includes("153.6")) return "AURAWATT LFP SERIES(153.6V/100AH)";
   return "Imported Sales Products";
@@ -300,13 +324,20 @@ async function run() {
       }
 
       const modelType = normalizeModelName(rawModelType, serialNumber);
-      if (!customerName || !modelType) {
+
+      let effectiveCustomerName = customerName;
+      if (!effectiveCustomerName && modelType) {
+        effectiveCustomerName = `Unknown Customer - ${referenceNo || serialNumber || `ROW-${rowNumber}`}`;
+        console.log(`Row ${rowNumber}: customer name missing, using placeholder '${effectiveCustomerName}' (fix via Manage Customer).`);
+      }
+
+      if (!effectiveCustomerName || !modelType) {
         rowsSkipped += 1;
         console.log(`Row ${rowNumber} skipped: missing customer or model (customer='${customerName}', model='${rawModelType}', serial='${serialNumber}')`);
         continue;
       }
 
-      const customer = await upsertCustomer(c, cache, customerName);
+      const customer = await upsertCustomer(c, cache, effectiveCustomerName);
       const product = await resolveProduct(c, cache, modelType, serialNumber);
       const saleDate = parseExcelDate(rawSaleDate);
       const saleId = generateId();
