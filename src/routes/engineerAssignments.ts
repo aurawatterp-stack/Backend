@@ -57,6 +57,22 @@ async function enrichAssignments(rows: Awaited<ReturnType<typeof listEngineerAss
   }));
 }
 
+/** GET /api/engineer-assignments/am-i-l1-backup — lets any logged-in engineer check
+ * (for themselves only) whether they're configured as the L1 backup engineer for any
+ * state/district, so the frontend can show a persistent "L1 Backup" queue tab. */
+router.get("/am-i-l1-backup", authenticate, async (req: Request, res: Response) => {
+  const user = (req as any).user as { name?: string };
+  if (!user?.name) return ok(res, { isL1Backup: false });
+  const c = await getCollections();
+  const masters = await c.engineerMasters
+    .find({ name: user.name, role: { $in: ["L1", "Backup"] } }, { projection: { id: 1 } })
+    .toArray();
+  const masterIds = masters.map((m) => m.id);
+  if (!masterIds.length) return ok(res, { isL1Backup: false });
+  const count = await c.engineerAssignments.countDocuments({ l1BackupEngineerId: { $in: masterIds } });
+  return ok(res, { isL1Backup: count > 0 });
+});
+
 router.get("/", authenticate, requireAnyPermission("roles:manage", "users:manage"), async (req: Request, res: Response) => {
   const { q, state, district, page, limit } = req.query as Record<string, string>;
   const data = await listEngineerAssignments({

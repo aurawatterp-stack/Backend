@@ -571,6 +571,9 @@ export type Complaint = {
   assignedEngineerId?: string;
   assignedEngineerName?: string;
   backupEngineerName?: string;
+  assignmentType?: "Primary L1" | "Backup L1" | "L2 Escalation";
+  overflowFromEngineerId?: string;
+  overflowFromEngineerName?: string;
   activeTicketCountAtAssignment?: number;
   escalatedById?: string;
   escalatedByName?: string;
