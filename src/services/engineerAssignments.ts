@@ -589,11 +589,28 @@ export async function cleanupStaleEngineerAssignments(actor?: AuthUser) {
     }
   }
 
+  // Permanently delete engineerMasters rows that no remaining assignment references and that
+  // don't correspond to a currently active account — these are the ghost names (like old,
+  // deleted engineers) that used to silently come back on every server restart.
+  const remainingAssignments = await c.engineerAssignments.find({}).toArray();
+  const referencedIds = new Set<string>();
+  for (const assignment of remainingAssignments) {
+    if (assignment.l1EngineerId) referencedIds.add(assignment.l1EngineerId);
+    if (assignment.l2EngineerId) referencedIds.add(assignment.l2EngineerId);
+    if (assignment.l1BackupEngineerId) referencedIds.add(assignment.l1BackupEngineerId);
+  }
+  const keepIds = new Set([...activeIds, ...referencedIds]);
+  const allMasters = await c.engineerMasters.find({}).toArray();
+  const staleMasterIds = allMasters.filter((master) => !keepIds.has(master.id)).map((master) => master.id);
+  if (staleMasterIds.length) {
+    await c.engineerMasters.deleteMany({ id: { $in: staleMasterIds } });
+  }
+
   if (removedRows.length || backupCleared) {
     await rebuildTicketLoads();
   }
 
-  return { removed: removedRows.length, backupCleared, removedRows };
+  return { removed: removedRows.length, backupCleared, mastersDeleted: staleMasterIds.length, removedRows };
 }
 
 async function countTicketLoadForEngineer(engineerId: string, engineerName?: string, excludeComplaintId?: string) {

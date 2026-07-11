@@ -5,7 +5,6 @@ import { DEFAULT_ROLE_PERMISSIONS } from "../rbac";
 import { CLOSED_COMPLAINT_STATUSES, isClosedComplaintStatus, normalizeComplaintSerialKey } from "../utils/complaintRules";
 import { generateId } from "../utils/id";
 import type { Complaint, SystemRoleName } from "../types";
-import { seedEngineerAssignmentsIfEmpty } from "../services/engineerAssignments";
 
 async function ensureUniqueIndex<T extends Document>(col: Collection<T>, fields: Record<string, 1 | -1>) {
   await col.createIndex(fields as any, { unique: true, background: true });
@@ -222,8 +221,6 @@ export async function initDatabase() {
       console.warn("DB init: complaint serial index still has legacy duplicates after repair; starting without enforcing the index on boot.");
     }
   }
-
-  await seedEngineerAssignmentsIfEmpty();
 
   // Seed system roles (insert-only; never overwrite admin customizations).
   const now = new Date();
