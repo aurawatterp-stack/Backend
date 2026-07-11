@@ -480,14 +480,39 @@ export async function listEngineerAssignments(params: { q?: string; state?: stri
   return { data, total, page, limit };
 }
 
+/** Maps a live user account's role (from Manage User Profiles) to the engineer role used by the assignment module. */
+const USER_ROLE_TO_ENGINEER_ROLE: Record<string, EngineerRole> = {
+  "L1 Engineer": "L1",
+  "L2 Technical Team": "L2",
+};
+
+/** Live, active L1/L2 user accounts (not the freeform engineerMasters registry), keyed the same
+ * way assignment rows reference engineers so staleness can be checked by id. */
+async function listActiveEngineers() {
+  const c = await getCollections();
+  const activeUsers = await c.users
+    .find({ role: { $in: Object.keys(USER_ROLE_TO_ENGINEER_ROLE) }, isActive: { $ne: false } })
+    .sort({ name: 1 })
+    .toArray();
+  return activeUsers.map((user) => {
+    const role = USER_ROLE_TO_ENGINEER_ROLE[user.role];
+    return {
+      id: engineerMasterId(user.name, role),
+      name: user.name,
+      role,
+      email: user.email ?? "",
+      mobile: user.mobile ?? "",
+    };
+  });
+}
+
 export async function listEngineerAssignmentOptions() {
   const c = await getCollections();
-  const [assignments, masters] = await Promise.all([
+  const [assignments, visibleEngineers] = await Promise.all([
     c.engineerAssignments.find({}).sort({ state: 1, district: 1 }).toArray(),
-    c.engineerMasters.find({}).sort({ role: 1, name: 1 }).toArray(),
+    listActiveEngineers(),
   ]);
   const geography = getIndiaGeography();
-  const visibleEngineers = masters.filter((row) => row.role !== "Backup" && !/backup/i.test(row.name));
   const districtsByState: Record<string, string[]> = Object.fromEntries(
     geography.stateDistrictEntries.map((entry) => [entry.state, [...entry.districts]])
   );
@@ -502,8 +527,73 @@ export async function listEngineerAssignmentOptions() {
     states: Array.from(new Set([...geography.states, ...assignments.map((row) => row.state)])).sort((a, b) => a.localeCompare(b)),
     districts: Array.from(new Set(Object.values(districtsByState).flat())).sort((a, b) => a.localeCompare(b)),
     districtsByState,
-    engineers: visibleEngineers.map((row) => ({ id: row.id, name: row.name, role: row.role, email: row.email ?? "", mobile: row.mobile ?? "" })),
+    engineers: visibleEngineers,
   };
+}
+
+/**
+ * Deletes assignment rows whose L1 or L2 engineer no longer maps to an active account (routing
+ * would be broken for that district anyway), and clears just the backup field when only the
+ * backup engineer has gone stale (L1/L2 still work, so the row is kept).
+ */
+export async function cleanupStaleEngineerAssignments(actor?: AuthUser) {
+  const c = await getCollections();
+  const [assignments, activeEngineers] = await Promise.all([
+    c.engineerAssignments.find({}).toArray(),
+    listActiveEngineers(),
+  ]);
+  const activeIds = new Set(activeEngineers.map((engineer) => engineer.id));
+  const now = new Date();
+
+  const removedRows: Array<{ state: string; district: string }> = [];
+  let backupCleared = 0;
+
+  for (const assignment of assignments) {
+    const l1Stale = !activeIds.has(assignment.l1EngineerId);
+    const l2Stale = !activeIds.has(assignment.l2EngineerId);
+
+    if (l1Stale || l2Stale) {
+      await c.engineerAssignments.deleteOne({ id: assignment.id });
+      await c.engineerAssignmentAudit.insertOne({
+        id: generateId(),
+        assignmentId: assignment.id,
+        action: "deleted",
+        state: assignment.state,
+        district: assignment.district,
+        before: assignment,
+        by: actor?.userId,
+        byName: actor?.name,
+        note: "Removed automatically: L1 or L2 engineer is no longer an active account.",
+        createdAt: now,
+      });
+      removedRows.push({ state: assignment.state, district: assignment.district });
+      continue;
+    }
+
+    const backupStale = Boolean(assignment.l1BackupEngineerId) && !activeIds.has(assignment.l1BackupEngineerId);
+    if (backupStale) {
+      await c.engineerAssignments.updateOne({ id: assignment.id }, { $set: { l1BackupEngineerId: "", updatedAt: now } });
+      await c.engineerAssignmentAudit.insertOne({
+        id: generateId(),
+        assignmentId: assignment.id,
+        action: "updated",
+        state: assignment.state,
+        district: assignment.district,
+        before: assignment,
+        by: actor?.userId,
+        byName: actor?.name,
+        note: "Backup engineer cleared automatically: no longer an active account.",
+        createdAt: now,
+      });
+      backupCleared += 1;
+    }
+  }
+
+  if (removedRows.length || backupCleared) {
+    await rebuildTicketLoads();
+  }
+
+  return { removed: removedRows.length, backupCleared, removedRows };
 }
 
 async function countTicketLoadForEngineer(engineerId: string, engineerName?: string, excludeComplaintId?: string) {

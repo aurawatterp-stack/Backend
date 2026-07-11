@@ -8,6 +8,7 @@ import { getCollections } from "../db/collections";
 import { authenticate, requireAnyPermission } from "../middleware/auth";
 import { fail, ok } from "../utils/http";
 import {
+  cleanupStaleEngineerAssignments,
   createOrUpdateEngineerAssignment,
   createOrUpdateEngineerAssignments,
   deleteEngineerAssignment,
@@ -198,6 +199,13 @@ router.post(
 
 router.post("/rebuild-loads", authenticate, requireAnyPermission("roles:manage", "users:manage"), async (_req: Request, res: Response) => {
   const data = await rebuildTicketLoads();
+  return ok(res, data);
+});
+
+/** POST /api/engineer-assignments/cleanup-stale — deletes mappings whose L1/L2 engineer account
+ * no longer exists/is inactive, and clears backup references that have gone stale. Admin only. */
+router.post("/cleanup-stale", authenticate, requireAnyPermission("roles:manage", "users:manage"), async (req: Request, res: Response) => {
+  const data = await cleanupStaleEngineerAssignments((req as any).user);
   return ok(res, data);
 });
 
