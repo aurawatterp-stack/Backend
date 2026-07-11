@@ -248,7 +248,8 @@ export type Product = {
   createdAt: Date;
 };
 
-export type PriceStateName = "UP" | "Bihar" | "MP" | "Haryana" | "Rajasthan" | "Punjab";
+/** Any Indian state/UT name — no longer restricted to the original six, so admins can add new states from the Price Input Module. */
+export type PriceStateName = string;
 
 export type PriceStatePoint = {
   distributor: number;

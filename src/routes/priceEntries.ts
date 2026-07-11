@@ -8,8 +8,6 @@ import { generateId } from "../utils/id";
 
 const router: Router = express.Router();
 
-const PRICE_STATES: PriceStateName[] = ["UP", "Bihar", "MP", "Haryana", "Rajasthan", "Punjab"];
-
 function toNumber(value: unknown): number {
   const n = Number(value);
   return Number.isFinite(n) ? n : 0;
@@ -24,23 +22,14 @@ function parsePricePoint(value: unknown): PriceStatePoint {
   };
 }
 
-function parsePrices(value: unknown): Record<PriceStateName, PriceStatePoint> {
-  const v = (value ?? {}) as Record<string, unknown>;
-  const result = {} as Record<PriceStateName, PriceStatePoint>;
-  for (const state of PRICE_STATES) {
-    result[state] = parsePricePoint(v[state]);
-  }
-  return result;
-}
-
-/** Only includes states actually present in `value`, so a partial update doesn't zero out the rest. */
-function parsePartialPrices(value: unknown): Partial<Record<PriceStateName, PriceStatePoint>> {
+/** Only includes states actually present in `value`, so a partial update doesn't zero out the rest and a create doesn't need to know every state up front. */
+function parsePrices(value: unknown): Partial<Record<PriceStateName, PriceStatePoint>> {
   const v = (value ?? {}) as Record<string, unknown>;
   const result: Partial<Record<PriceStateName, PriceStatePoint>> = {};
-  for (const state of PRICE_STATES) {
-    if (v[state] !== undefined) {
-      result[state] = parsePricePoint(v[state]);
-    }
+  for (const key of Object.keys(v)) {
+    const state = key.trim();
+    if (!state) continue;
+    result[state] = parsePricePoint(v[key]);
   }
   return result;
 }
@@ -76,7 +65,7 @@ router.post("/", authenticate, requireAnyPermission("pricing:manage"), async (re
     description: String(description).trim(),
     modelNo: String(modelNo).trim(),
     modelKey: normalizedKey,
-    prices: parsePrices(prices),
+    prices: parsePrices(prices) as Record<PriceStateName, PriceStatePoint>,
     createdAt: now,
     updatedAt: now,
   };
@@ -96,7 +85,7 @@ router.put("/:id", authenticate, requireAnyPermission("pricing:manage"), async (
   if (req.body.modelNo !== undefined) update.modelNo = String(req.body.modelNo).trim();
   if (req.body.srNo !== undefined) update.srNo = req.body.srNo !== "" && req.body.srNo !== null ? Number(req.body.srNo) : undefined;
   if (req.body.prices !== undefined) {
-    update.prices = { ...existing.prices, ...parsePartialPrices(req.body.prices) } as Record<PriceStateName, PriceStatePoint>;
+    update.prices = { ...existing.prices, ...parsePrices(req.body.prices) } as Record<PriceStateName, PriceStatePoint>;
   }
 
   await c.priceEntries.updateOne({ id }, { $set: update });
