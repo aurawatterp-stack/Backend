@@ -174,4 +174,10 @@ router.post("/rebuild-loads", auth_1.authenticate, (0, auth_1.requireAnyPermissi
     const data = await (0, engineerAssignments_1.rebuildTicketLoads)();
     return (0, http_1.ok)(res, data);
 });
+/** POST /api/engineer-assignments/cleanup-stale — deletes mappings whose L1/L2 engineer account
+ * no longer exists/is inactive, and clears backup references that have gone stale. Admin only. */
+router.post("/cleanup-stale", auth_1.authenticate, (0, auth_1.requireAnyPermission)("roles:manage", "users:manage"), async (req, res) => {
+    const data = await (0, engineerAssignments_1.cleanupStaleEngineerAssignments)(req.user);
+    return (0, http_1.ok)(res, data);
+});
 exports.default = router;

@@ -5,7 +5,6 @@ const collections_1 = require("./collections");
 const rbac_1 = require("../rbac");
 const complaintRules_1 = require("../utils/complaintRules");
 const id_1 = require("../utils/id");
-const engineerAssignments_1 = require("../services/engineerAssignments");
 async function ensureUniqueIndex(col, fields) {
     await col.createIndex(fields, { unique: true, background: true });
 }
@@ -190,7 +189,6 @@ async function initDatabase() {
             console.warn("DB init: complaint serial index still has legacy duplicates after repair; starting without enforcing the index on boot.");
         }
     }
-    await (0, engineerAssignments_1.seedEngineerAssignmentsIfEmpty)();
     // Seed system roles (insert-only; never overwrite admin customizations).
     const now = new Date();
     for (const name of Object.keys(rbac_1.DEFAULT_ROLE_PERMISSIONS)) {
