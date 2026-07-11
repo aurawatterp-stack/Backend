@@ -208,6 +208,98 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:ent
         .toArray();
     return (0, http_1.ok)(res, { data, total, page: p, limit: l });
 });
+/** PUT /api/sales/:id — edit a sale's full record: customer (including that customer's own
+ * master-data fields), document type, reference no, sale date, and the sold serial/product.
+ * Changing the serial reconciles inventory: the old serial is released back to stock and the
+ * new one is marked Sold, mirroring what happens at sale creation. */
+router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry", "dispatch:manage"), async (req, res) => {
+    const c = await (0, collections_1.getCollections)();
+    const { id } = req.params;
+    const existing = await c.sales.findOne({ id });
+    if (!existing)
+        return (0, http_1.fail)(res, "Sale not found", 404);
+    const { documentType, referenceNo, saleDate, customerId, unregisteredCustomerName, unregisteredCustomerAddress, unregisteredCustomerGst, dealerRegistered, stateRegion, serialNumber, materialName, customerName, customerPhone, customerEmail, customerAddress, customerType, } = req.body;
+    const isRegisteredCustomer = dealerRegistered !== false;
+    if (!documentType || !saleDate || (isRegisteredCustomer && !customerId)) {
+        return (0, http_1.fail)(res, "documentType, saleDate and registered customer are required");
+    }
+    if (!isRegisteredCustomer && (!unregisteredCustomerName || !unregisteredCustomerAddress || !stateRegion)) {
+        return (0, http_1.fail)(res, "Non-registered customer name, ship-to address and state/region are required");
+    }
+    let customer = null;
+    if (isRegisteredCustomer) {
+        customer = await c.customers.findOne({ id: customerId });
+        if (!customer)
+            return (0, http_1.fail)(res, "Customer not found", 404);
+    }
+    let finalReferenceNo = "";
+    try {
+        finalReferenceNo = await resolveUniquePiNumber(c, referenceNo, saleDate, String(id));
+    }
+    catch (err) {
+        return (0, http_1.fail)(res, err instanceof Error ? err.message : "Invalid PI number");
+    }
+    const normalizedNewSerial = normalizeSerialNumber(serialNumber);
+    const normalizedOldSerial = normalizeSerialNumber(existing.serialNumber);
+    let resolvedMaterialName = materialName ?? existing.materialName;
+    if (normalizedNewSerial !== normalizedOldSerial) {
+        if (normalizedOldSerial) {
+            const oldMfg = await c.manufactured.findOne({ serialNumber: normalizedOldSerial });
+            if (oldMfg) {
+                await c.manufactured.updateOne({ id: oldMfg.id }, { $set: { status: "In Stock", updatedAt: new Date() }, $unset: { invoiceNo: "", customerId: "", soldDate: "" } });
+            }
+            await (0, serialLifecycle_1.updateSerialStatus)(c, { serialNumber: normalizedOldSerial, status: "Available" });
+        }
+        if (normalizedNewSerial) {
+            const newMfg = await resolveManufacturedProductForSerial(c, { serialNumber: normalizedNewSerial, materialName: resolvedMaterialName, referenceNo: finalReferenceNo, saleDate, customerId, paymentStatus: existing.paymentStatus }, normalizedNewSerial);
+            if (!newMfg)
+                return (0, http_1.fail)(res, "Serial number not found in manufactured products");
+            if (newMfg.status === "Sold")
+                return (0, http_1.fail)(res, "This product is already sold");
+            await c.manufactured.updateOne({ id: newMfg.id }, {
+                $set: {
+                    status: "Sold",
+                    invoiceNo: finalReferenceNo,
+                    customerId: isRegisteredCustomer ? customerId : undefined,
+                    soldDate: new Date(saleDate),
+                    updatedAt: new Date(),
+                },
+            });
+            await (0, serialLifecycle_1.updateSerialStatus)(c, { serialNumber: normalizedNewSerial, status: "Sold" });
+            const product = await c.products.findOne({ id: newMfg.productId });
+            if (product)
+                resolvedMaterialName = product.model;
+        }
+    }
+    if (isRegisteredCustomer && customer && (customerName || customerPhone || customerEmail !== undefined || customerAddress !== undefined || customerType)) {
+        await c.customers.updateOne({ id: customer.id }, {
+            $set: {
+                name: customerName || customer.name,
+                phone: customerPhone || customer.phone,
+                email: customerEmail !== undefined ? customerEmail : customer.email,
+                address: customerAddress !== undefined ? customerAddress : customer.address,
+                type: customerType || customer.type,
+                updatedAt: new Date(),
+            },
+        });
+    }
+    const update = {
+        documentType,
+        referenceNo: finalReferenceNo,
+        saleDate: new Date(saleDate),
+        dealerRegistered: isRegisteredCustomer,
+        customerId: isRegisteredCustomer ? customerId : undefined,
+        unregisteredCustomerName: isRegisteredCustomer ? undefined : unregisteredCustomerName,
+        unregisteredCustomerAddress: isRegisteredCustomer ? undefined : unregisteredCustomerAddress,
+        unregisteredCustomerGst: isRegisteredCustomer ? undefined : unregisteredCustomerGst,
+        stateRegion: isRegisteredCustomer ? existing.stateRegion : stateRegion,
+        serialNumber: normalizedNewSerial || undefined,
+        materialName: resolvedMaterialName,
+    };
+    await c.sales.updateOne({ id }, { $set: update });
+    const updated = await c.sales.findOne({ id });
+    return (0, http_1.ok)(res, updated);
+});
 router.get("/next-pi-number", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const yearParam = Number(req.query.year);

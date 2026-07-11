@@ -21,6 +21,7 @@ exports.ALL_PERMISSIONS = [
     "accounts:manage",
     "complaints:consumer",
     "complaints:supplier",
+    "pricing:manage",
 ];
 exports.SYSTEM_ROLES = [
     "Admin",

@@ -284,14 +284,18 @@ function engineerIdentityFilter(engineerId, engineerName) {
 }
 async function engineerTicketCounts(engineerId, engineerName, excludeComplaintId) {
     const c = await (0, collections_1.getCollections)();
+    // Backup-overflow tickets live in the engineer's dedicated "L1 Backup" queue and must not
+    // eat into their own primary Active Work / Waiting Lobby capacity.
     const activeFilter = {
         ...engineerIdentityFilter(engineerId, engineerName),
         status: { $in: [...complaintRules_1.ACTIVE_TICKET_STATUSES] },
+        assignmentType: { $ne: "Backup L1" },
     };
     const waitingFilter = {
         ...engineerIdentityFilter(engineerId, engineerName),
         assignmentStatus: "Waiting",
         status: { $in: [...complaintRules_1.LOBBY_TICKET_STATUSES] },
+        assignmentType: { $ne: "Backup L1" },
     };
     if (excludeComplaintId) {
         activeFilter.id = { $ne: excludeComplaintId };
@@ -302,6 +306,20 @@ async function engineerTicketCounts(engineerId, engineerName, excludeComplaintId
         c.complaints.countDocuments(waitingFilter),
     ]);
     return { activeCount, waitingCount };
+}
+/** Count of tickets currently sitting in this engineer's dedicated backup queue
+ * (assignmentType "Backup L1"). Uncapped — used only for the activeTicketCountAtAssignment
+ * metadata, independent of the engineer's own primary Active Work / Waiting Lobby load. */
+async function backupTicketCount(engineerId, engineerName, excludeComplaintId) {
+    const c = await (0, collections_1.getCollections)();
+    const filter = {
+        ...engineerIdentityFilter(engineerId, engineerName),
+        assignmentType: "Backup L1",
+        status: { $nin: [...complaintRules_1.CLOSED_COMPLAINT_STATUSES] },
+    };
+    if (excludeComplaintId)
+        filter.id = { $ne: excludeComplaintId };
+    return c.complaints.countDocuments(filter);
 }
 function buildEngineerIdentityFilter(identities) {
     const or = [];
@@ -420,6 +438,7 @@ async function buildServiceAssignment(input) {
                 priority,
                 escalationLevel: input.level,
                 backupEngineerName: mappedBackup?.name ?? districtBackup?.name,
+                assignmentType: "Primary L1",
                 ...primaryAssignment,
             };
         }
@@ -427,16 +446,29 @@ async function buildServiceAssignment(input) {
         if (!backupEngineer) {
             return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
         }
-        const backupAssignment = assignmentForEngineer(backupEngineer);
-        if (!backupAssignment) {
-            return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
-        }
+        // Backup tickets don't split into active/waiting like primary work does, and have no
+        // capacity cap — they all land in the backup engineer's dedicated "L1 Backup" queue
+        // (solved from there only, paginated), independent of that engineer's own primary
+        // Active Work / Waiting Lobby load.
+        const backupCount = await backupTicketCount(backupEngineer.id, backupEngineer.name, input.excludeComplaintId);
         return {
             region: regionConfig.name,
             priority,
             escalationLevel: input.level,
             backupEngineerName: backupEngineer.name,
-            ...backupAssignment,
+            assignmentType: "Backup L1",
+            overflowFromEngineerId: engineer.id,
+            overflowFromEngineerName: engineer.name,
+            assignedEngineerId: backupEngineer.id,
+            assignedEngineerName: backupEngineer.name,
+            activeTicketCountAtAssignment: backupCount,
+            assignmentStatus: "Assigned",
+            waitingSince: undefined,
+            slaStartedAt: undefined,
+            slaDueAt: undefined,
+            slaPaused: true,
+            queuePosition: undefined,
+            status: statusByLevel[input.level],
         };
     }
     if (mappedPrimary && !preferredEngineer && input.level === "L2") {
@@ -449,6 +481,7 @@ async function buildServiceAssignment(input) {
             priority,
             escalationLevel: input.level,
             backupEngineerName: mappedBackup?.name ?? districtBackup?.name,
+            assignmentType: "L2 Escalation",
             ...primaryAssignment,
         };
     }
@@ -604,6 +637,9 @@ async function rebalanceL1Queue() {
         type: "Consumer",
         status: { $in: ACTIVE_ENGINEER_STATUSES },
         $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }],
+        // Backup-overflow tickets live in their own uncapped dedicated queue — don't let
+        // this primary-capacity sweep demote them.
+        assignmentType: { $ne: "Backup L1" },
     })
         .toArray();
     const byEngineer = new Map();
@@ -973,6 +1009,9 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         assignedEngineerId: assignmentDecision?.assignedEngineerId,
         assignedEngineerName: assignmentDecision?.assignedEngineerName,
         backupEngineerName: assignmentDecision?.backupEngineerName ?? backupEngineerName,
+        assignmentType: assignmentDecision?.assignmentType,
+        overflowFromEngineerId: assignmentDecision?.overflowFromEngineerId,
+        overflowFromEngineerName: assignmentDecision?.overflowFromEngineerName,
         activeTicketCountAtAssignment: assignmentDecision?.activeTicketCountAtAssignment,
         slaStartedAt: assignmentDecision?.slaStartedAt,
         slaDueAt: assignmentDecision?.slaDueAt,

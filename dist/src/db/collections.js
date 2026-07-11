@@ -16,6 +16,7 @@ async function getCollections() {
         pendingCustomerRegistrations: db.collection("pending_customer_registrations"),
         customers: db.collection("customers"),
         products: db.collection("products"),
+        priceEntries: db.collection("price_entries"),
         rawMaterials: db.collection("raw_materials"),
         manufactured: db.collection("manufactured"),
         serials: db.collection("serials"),
