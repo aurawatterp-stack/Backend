@@ -5,6 +5,7 @@ import { CONFIG } from "../config";
 import { getCollections } from "../db/collections";
 import { authenticate, requireAnyPermission } from "../middleware/auth";
 import { normalizeRole } from "../rbac";
+import { engineerMasterId, type EngineerRole } from "../services/engineerAssignments";
 import type { User } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -14,6 +15,37 @@ const router: Router = express.Router();
 function normalizeAssignedStates(value: unknown) {
   if (!Array.isArray(value)) return [];
   return Array.from(new Set(value.map((item) => String(item).trim()).filter(Boolean)));
+}
+
+/** Maps a login account's role to the engineer_master role it corresponds to, so deactivating or
+ * deleting a user here can keep that registry in sync — without this, the Onsite Engineer / L1-L2
+ * dropdowns (which read engineer_master directly) kept showing accounts long after they were
+ * removed from User Profiles, since the two collections were never linked. */
+const USER_ROLE_TO_ENGINEER_ROLE: Record<string, EngineerRole> = {
+  "L1 Engineer": "L1",
+  "L2 Technical Team": "L2",
+  "L3 Advanced OEM Support": "L3",
+};
+
+async function syncEngineerMasterActive(
+  user: { name: string; email?: string; mobile?: string; role: string },
+  isActive: boolean
+) {
+  const engineerRole = USER_ROLE_TO_ENGINEER_ROLE[user.role];
+  if (!engineerRole || !user.name) return;
+  const c = await getCollections();
+  const id = engineerMasterId(user.name, engineerRole);
+  const now = new Date();
+  // Upsert (not just update) so a renamed or newly created L1/L2/L3 account always gets a matching
+  // engineer_master row — otherwise it silently never appears in the Onsite Engineer dropdown.
+  await c.engineerMasters.updateOne(
+    { id },
+    {
+      $set: { name: user.name, role: engineerRole, email: user.email ?? "", mobile: user.mobile ?? "", isActive, updatedAt: now },
+      $setOnInsert: { id, createdAt: now },
+    },
+    { upsert: true }
+  );
 }
 
 /**
@@ -122,6 +154,21 @@ router.put("/:id", authenticate, requireAnyPermission("users:manage"), async (re
   await c.users.updateOne({ id }, { $set: update });
   const user = { ...existing, ...update };
   const { passwordHash: _, ...safeUser } = user as any;
+
+  // Keep engineer_master in step: if this account's identity (name/role) changed, the old
+  // engineer_master row is now orphaned under the old name/role — deactivate it. Then sync the
+  // (possibly new) identity's active state to match this account's isActive.
+  const nextName = update.name ?? existing.name;
+  const nextRole = update.role ?? existing.role;
+  const nextIsActive = update.isActive ?? existing.isActive;
+  if (existing.name !== nextName || existing.role !== nextRole) {
+    await syncEngineerMasterActive({ name: existing.name, role: existing.role }, false);
+  }
+  await syncEngineerMasterActive(
+    { name: nextName, role: nextRole, email: existing.email, mobile: update.mobile ?? existing.mobile },
+    Boolean(nextIsActive)
+  );
+
   return ok(res, safeUser);
 });
 
@@ -132,8 +179,12 @@ router.put("/:id", authenticate, requireAnyPermission("users:manage"), async (re
 router.delete("/:id", authenticate, requireAnyPermission("users:manage"), async (req: Request, res: Response) => {
   const { id } = req.params;
   const c = await getCollections();
-  const result = await c.users.deleteOne({ id });
-  if (!result.deletedCount) return fail(res, "User not found", 404);
+  const existing = await c.users.findOne({ id });
+  if (!existing) return fail(res, "User not found", 404);
+  await c.users.deleteOne({ id });
+  // Deleting the login account doesn't remove its engineer_master row on its own — deactivate it
+  // here so it stops showing up in the Onsite Engineer / L1-L2 dropdowns immediately.
+  await syncEngineerMasterActive({ name: existing.name, role: existing.role, email: existing.email, mobile: existing.mobile }, false);
   return ok(res, { message: "User deleted" });
 });
 

@@ -506,6 +506,36 @@ async function listActiveEngineers() {
   });
 }
 
+/**
+ * Deactivates engineer_master rows in `candidateIds` that, after the caller's change, are no
+ * longer referenced by any assignment and don't correspond to a currently active login account.
+ * Called whenever an assignment's L1/L2/backup engineer is replaced or its row is deleted — without
+ * this, the replaced/removed name stays `isActive: true` forever and keeps showing up in the
+ * Onsite Engineer / L1-L2 dropdowns, which read engineer_master directly.
+ */
+async function deactivateOrphanedEngineerMasters(candidateIds: Iterable<string | undefined>) {
+  const c = await getCollections();
+  const ids = [...new Set(candidateIds)].filter((id): id is string => Boolean(id));
+  if (!ids.length) return;
+
+  const [assignments, activeEngineers] = await Promise.all([
+    c.engineerAssignments.find({}).toArray(),
+    listActiveEngineers(),
+  ]);
+  const referencedIds = new Set<string>();
+  for (const assignment of assignments) {
+    if (assignment.l1EngineerId) referencedIds.add(assignment.l1EngineerId);
+    if (assignment.l2EngineerId) referencedIds.add(assignment.l2EngineerId);
+    if (assignment.l1BackupEngineerId) referencedIds.add(assignment.l1BackupEngineerId);
+  }
+  const activeIds = new Set(activeEngineers.map((engineer) => engineer.id));
+
+  const staleIds = ids.filter((id) => !referencedIds.has(id) && !activeIds.has(id));
+  if (staleIds.length) {
+    await c.engineerMasters.updateMany({ id: { $in: staleIds } }, { $set: { isActive: false, updatedAt: new Date() } });
+  }
+}
+
 export async function listEngineerAssignmentOptions() {
   const c = await getCollections();
   const [assignments, visibleEngineers] = await Promise.all([
@@ -702,6 +732,7 @@ async function upsertEngineerAssignment(input: EngineerAssignmentInput, actor?: 
 
   if (previous) {
     await c.engineerAssignments.updateOne({ id: previous.id }, { $set: next });
+    await deactivateOrphanedEngineerMasters([previous.l1EngineerId, previous.l2EngineerId, previous.l1BackupEngineerId]);
   } else {
     await c.engineerAssignments.insertOne(next);
   }
@@ -764,6 +795,7 @@ export async function deleteEngineerAssignment(id: string, actor?: AuthUser) {
   const existing = await c.engineerAssignments.findOne({ id });
   if (!existing) return null;
   await c.engineerAssignments.deleteOne({ id });
+  await deactivateOrphanedEngineerMasters([existing.l1EngineerId, existing.l2EngineerId, existing.l1BackupEngineerId]);
   await c.engineerAssignmentAudit.insertOne({
     id: generateId(),
     assignmentId: id,
