@@ -34,7 +34,7 @@ function runSerialCsvUpload(req: Request, res: Response, next: NextFunction) {
 }
 
 /** GET /api/serials — filter by series, status */
-router.get("/", authenticate, requireAnyPermission("inventory:serials"), async (req: Request, res: Response) => {
+router.get("/", authenticate, requireAnyPermission("inventory:serials", "complaints:consumer"), async (req: Request, res: Response) => {
   const c = await getCollections();
   const { q = "", series, status, page = "1", limit = "20" } = req.query as Record<string, string>;
   const filter: Record<string, unknown> = {};
