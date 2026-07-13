@@ -10,6 +10,7 @@ import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
 import { updateSerialStatus } from "../utils/serialLifecycle";
+import { generateTicketNumber } from "../utils/ticketNumber";
 import { resolveAssignmentByStateDistrict, listL1TeamForL2, findEngineerMasterForUser } from "../services/engineerAssignments";
 import { recordTicketAssignmentLog, routeCustomerTicketByStateDistrict, refreshTicketLoadForAssignment } from "../services/ticketRouting";
 import {
@@ -1199,8 +1200,10 @@ router.post("/", authenticate, requireAnyPermission("complaints:consumer", "comp
   const assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
 
   const complaintStatus = assignmentDecision?.status ?? "Open at Aurawatt";
+  const ticketNumber = await generateTicketNumber();
   const complaint: Complaint = {
     id: generateId(),
+    ticketNumber,
     type,
     productSerialNo,
     productSerialNoKey: isClosedComplaintStatus(complaintStatus) ? undefined : productSerialNoKey || undefined,

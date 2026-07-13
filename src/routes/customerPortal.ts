@@ -6,6 +6,7 @@ import type { Complaint, Customer, ManufacturedProduct, Notification, Sale } fro
 import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
+import { generateTicketNumber } from "../utils/ticketNumber";
 import { recordTicketAssignmentLog, routeCustomerTicketByStateDistrict, refreshTicketLoadForAssignment } from "../services/ticketRouting";
 import {
   ACTIVE_COMPLAINT_DUPLICATE_MESSAGE,
@@ -362,8 +363,10 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req: Request, 
     assignmentDecision = null;
   }
   const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured?.customerPhones);
+  const ticketNumber = await generateTicketNumber(now);
   const complaint: Complaint = {
     id: generateId(),
+    ticketNumber,
     type: "Consumer",
     ...(serialNumber
       ? {
@@ -492,6 +495,7 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req: Request, 
 
   return ok(res, {
     id: complaint.id,
+    ticketNumber: complaint.ticketNumber,
     status: complaint.status,
     productSerialNo: complaint.productSerialNo || "",
     dateOfComplaint: complaint.dateOfComplaint,

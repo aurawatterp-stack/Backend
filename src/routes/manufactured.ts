@@ -229,24 +229,29 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
   const bomUsage: NonNullable<ManufacturedProduct["bomUsage"]> = [];
 
   if (seriesBom && Array.isArray(seriesBom.items)) {
+    const reserved = new Map<string, number>();
+    const allDeductions: { id: string; qty: number; materialName: string; batch?: string; inwardMode?: "Local" | "International" }[] = [];
+
     for (const item of seriesBom.items) {
       const requiredQty = Number(item.quantity) || 0;
       if (requiredQty <= 0) continue;
-      
+
       const rawMaterials = await c.rawMaterials
         .find({ productSeriesId: productSeries, materialName: item.materialName, quantityAvailable: { $gt: 0 } })
         .sort({ dateReceived: 1, createdAt: 1 })
         .toArray();
 
       let remainingRequired = requiredQty;
-      const deductions: { id: string; qty: number; materialName: string; batch?: string; inwardMode?: "Local" | "International" }[] = [];
 
       for (const rm of rawMaterials) {
         if (remainingRequired <= 0) break;
-        const available = rm.quantityAvailable;
+        const alreadyReserved = reserved.get(rm.id) ?? 0;
+        const available = rm.quantityAvailable - alreadyReserved;
+        if (available <= 0) continue;
         const toDeduct = Math.min(available, remainingRequired);
-        
-        deductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName, batch: rm.batch, inwardMode: rm.inwardMode });
+
+        reserved.set(rm.id, alreadyReserved + toDeduct);
+        allDeductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName, batch: rm.batch, inwardMode: rm.inwardMode });
         remainingRequired -= toDeduct;
 
         bomUsage.push({
@@ -263,24 +268,24 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
       if (remainingRequired > 0) {
         return fail(res, `Insufficient stock for Raw Material: ${item.materialName}. Required: ${requiredQty}, Available: ${requiredQty - remainingRequired}`);
       }
-      
-      for (const d of deductions) {
-        await c.rawMaterials.updateOne(
-          { id: d.id },
-          { $inc: { quantityAvailable: -d.qty }, $set: { updatedAt: new Date() } }
-        );
-        await c.inventoryLogs.insertOne({
-          id: generateId(),
-          type: "Manufacturing",
-          itemId: d.id,
-          itemName: `${d.materialName} (${d.batch ?? "No Batch"}${d.inwardMode ? `, ${d.inwardMode}` : ""})`,
-          quantityChange: -d.qty,
-          referenceId: serialNumber,
-          notes: `Consumed for Manufacturing Serial: ${serialNumber}`,
-          createdAt: new Date(),
-          createdBy: (req as any).user?.email || "System",
-        });
-      }
+    }
+
+    for (const d of allDeductions) {
+      await c.rawMaterials.updateOne(
+        { id: d.id },
+        { $inc: { quantityAvailable: -d.qty }, $set: { updatedAt: new Date() } }
+      );
+      await c.inventoryLogs.insertOne({
+        id: generateId(),
+        type: "Manufacturing",
+        itemId: d.id,
+        itemName: `${d.materialName} (${d.batch ?? "No Batch"}${d.inwardMode ? `, ${d.inwardMode}` : ""})`,
+        quantityChange: -d.qty,
+        referenceId: resolvedSerial.serialNumber,
+        notes: `Consumed for Manufacturing Serial: ${resolvedSerial.serialNumber}`,
+        createdAt: new Date(),
+        createdBy: (req as any).user?.email || "System",
+      });
     }
   }
 

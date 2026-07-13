@@ -560,6 +560,7 @@ export type SpareRequestPart = {
 
 export type Complaint = {
   id: string;
+  ticketNumber?: string;
   type: ComplaintType;
   productSerialNo?: string;
   productSerialNoKey?: string;
