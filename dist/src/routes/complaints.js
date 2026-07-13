@@ -11,6 +11,7 @@ const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const serialLifecycle_1 = require("../utils/serialLifecycle");
+const ticketNumber_1 = require("../utils/ticketNumber");
 const engineerAssignments_1 = require("../services/engineerAssignments");
 const ticketRouting_1 = require("../services/ticketRouting");
 const complaintRules_1 = require("../utils/complaintRules");
@@ -980,8 +981,10 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
     }
     const assignmentDecision = assignment && !("blockedMessage" in assignment) ? assignment : null;
     const complaintStatus = assignmentDecision?.status ?? "Open at Aurawatt";
+    const ticketNumber = await (0, ticketNumber_1.generateTicketNumber)();
     const complaint = {
         id: (0, id_1.generateId)(),
+        ticketNumber,
         type,
         productSerialNo,
         productSerialNoKey: (0, complaintRules_1.isClosedComplaintStatus)(complaintStatus) ? undefined : productSerialNoKey || undefined,

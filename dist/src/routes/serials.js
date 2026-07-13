@@ -35,7 +35,7 @@ function runSerialCsvUpload(req, res, next) {
     });
 }
 /** GET /api/serials — filter by series, status */
-router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:serials"), async (req, res) => {
+router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventory:serials", "complaints:consumer"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { q = "", series, status, page = "1", limit = "20" } = req.query;
     const filter = {};

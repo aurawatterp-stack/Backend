@@ -9,6 +9,7 @@ const collections_1 = require("../db/collections");
 const cloudinary_1 = require("../utils/cloudinary");
 const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
+const ticketNumber_1 = require("../utils/ticketNumber");
 const ticketRouting_1 = require("../services/ticketRouting");
 const complaintRules_1 = require("../utils/complaintRules");
 const validation_1 = require("../utils/validation");
@@ -325,8 +326,10 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req, res) => {
         assignmentDecision = null;
     }
     const customerPhones = mergePhones(mobile, linkedCustomer?.phone, manufactured?.customerPhones);
+    const ticketNumber = await (0, ticketNumber_1.generateTicketNumber)(now);
     const complaint = {
         id: (0, id_1.generateId)(),
+        ticketNumber,
         type: "Consumer",
         ...(serialNumber
             ? {
@@ -452,6 +455,7 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req, res) => {
     }
     return (0, http_1.ok)(res, {
         id: complaint.id,
+        ticketNumber: complaint.ticketNumber,
         status: complaint.status,
         productSerialNo: complaint.productSerialNo || "",
         dateOfComplaint: complaint.dateOfComplaint,

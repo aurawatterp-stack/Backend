@@ -198,6 +198,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
     const seriesBom = await c.boms.findOne({ series: productSeries });
     const bomUsage = [];
     if (seriesBom && Array.isArray(seriesBom.items)) {
+        const reserved = new Map();
+        const allDeductions = [];
         for (const item of seriesBom.items) {
             const requiredQty = Number(item.quantity) || 0;
             if (requiredQty <= 0)
@@ -207,13 +209,16 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
                 .sort({ dateReceived: 1, createdAt: 1 })
                 .toArray();
             let remainingRequired = requiredQty;
-            const deductions = [];
             for (const rm of rawMaterials) {
                 if (remainingRequired <= 0)
                     break;
-                const available = rm.quantityAvailable;
+                const alreadyReserved = reserved.get(rm.id) ?? 0;
+                const available = rm.quantityAvailable - alreadyReserved;
+                if (available <= 0)
+                    continue;
                 const toDeduct = Math.min(available, remainingRequired);
-                deductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName, batch: rm.batch, inwardMode: rm.inwardMode });
+                reserved.set(rm.id, alreadyReserved + toDeduct);
+                allDeductions.push({ id: rm.id, qty: toDeduct, materialName: rm.materialName, batch: rm.batch, inwardMode: rm.inwardMode });
                 remainingRequired -= toDeduct;
                 bomUsage.push({
                     rawMaterialId: rm.id,
@@ -228,20 +233,20 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
             if (remainingRequired > 0) {
                 return (0, http_1.fail)(res, `Insufficient stock for Raw Material: ${item.materialName}. Required: ${requiredQty}, Available: ${requiredQty - remainingRequired}`);
             }
-            for (const d of deductions) {
-                await c.rawMaterials.updateOne({ id: d.id }, { $inc: { quantityAvailable: -d.qty }, $set: { updatedAt: new Date() } });
-                await c.inventoryLogs.insertOne({
-                    id: (0, id_1.generateId)(),
-                    type: "Manufacturing",
-                    itemId: d.id,
-                    itemName: `${d.materialName} (${d.batch ?? "No Batch"}${d.inwardMode ? `, ${d.inwardMode}` : ""})`,
-                    quantityChange: -d.qty,
-                    referenceId: serialNumber,
-                    notes: `Consumed for Manufacturing Serial: ${serialNumber}`,
-                    createdAt: new Date(),
-                    createdBy: req.user?.email || "System",
-                });
-            }
+        }
+        for (const d of allDeductions) {
+            await c.rawMaterials.updateOne({ id: d.id }, { $inc: { quantityAvailable: -d.qty }, $set: { updatedAt: new Date() } });
+            await c.inventoryLogs.insertOne({
+                id: (0, id_1.generateId)(),
+                type: "Manufacturing",
+                itemId: d.id,
+                itemName: `${d.materialName} (${d.batch ?? "No Batch"}${d.inwardMode ? `, ${d.inwardMode}` : ""})`,
+                quantityChange: -d.qty,
+                referenceId: resolvedSerial.serialNumber,
+                notes: `Consumed for Manufacturing Serial: ${resolvedSerial.serialNumber}`,
+                createdAt: new Date(),
+                createdBy: req.user?.email || "System",
+            });
         }
     }
     const normalizedStatus = status === "Sold" || status === "Returned" || status === "In Stock" || status === "Failed" ? status : "In Stock";
