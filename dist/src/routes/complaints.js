@@ -230,6 +230,12 @@ function createWorkflowHistoryEvent(input) {
         note: input.note,
     };
 }
+function isL1ServiceRole(role) {
+    return role === "L1 Engineer" || role === "Backup" || role === "L1 Backup Engineer";
+}
+function isOnsiteTicket(complaint) {
+    return complaint.siteVisitRequired === true || complaint.status === "Assigned for Onsite";
+}
 function sortForL1Queue(rows) {
     return [...rows].sort((a, b) => (activeQueueRank(a.status) - activeQueueRank(b.status) ||
         priorityRank(a.priority) - priorityRank(b.priority) ||
@@ -748,8 +754,6 @@ async function complaintRoleScope(user) {
         return {
             $or: [
                 ...ownAssignmentFilters,
-                { siteVisitRequired: true, siteVisitEngineerId: user.userId },
-                ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
                 { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
                 ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
             ],
@@ -808,8 +812,6 @@ async function canAccessComplaint(user, complaint) {
         if (user.role === "Backup")
             return ownMatch;
         return (ownMatch ||
-            (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-            (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
             (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))));
     }
     if (user.role === "L2 Technical Team") {
@@ -1187,6 +1189,12 @@ router.put("/:id/status", auth_1.authenticate, (0, auth_1.requireAnyPermission)(
         return (0, http_1.fail)(res, "status is required");
     const updatedAt = new Date();
     const nextStatus = String(status);
+    if (isL1ServiceRole(user.role) && isOnsiteTicket(existing) && (0, complaintRules_1.isClosedComplaintStatus)(nextStatus)) {
+        return (0, http_1.fail)(res, "Onsite tickets assigned by L2 can only be closed by L2 after reviewing the onsite progress.", 403);
+    }
+    if (isL1ServiceRole(user.role) && isOnsiteTicket(existing) && (nextStatus === "Escalated to L2" || nextStatus === "Escalated to L3")) {
+        return (0, http_1.fail)(res, "Use Updates done, progress sent to L2 for onsite tickets assigned by L2.", 403);
+    }
     const escalationReason = normalizeText(req.body.escalationReason);
     const escalationNotes = normalizeText(req.body.escalationNotes);
     const noteSuffix = nextStatus === "Escalated to L3"
@@ -1233,6 +1241,18 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     const user = req.user;
     if (!(await canAccessComplaint(user, existing))) {
         return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
+    }
+    const returnOnsiteProgressToL2 = Boolean(req.body.returnOnsiteProgressToL2);
+    const l1ActingOnOnsiteTicket = isL1ServiceRole(user.role) && isOnsiteTicket(existing);
+    const requestedStatus = String(req.body.status ?? "");
+    const requestedEscalationLevel = String(req.body.escalationLevel ?? "");
+    if (l1ActingOnOnsiteTicket && (0, complaintRules_1.isClosedComplaintStatus)(requestedStatus)) {
+        return (0, http_1.fail)(res, "Onsite tickets assigned by L2 can only be closed by L2 after reviewing the onsite progress.", 403);
+    }
+    if (l1ActingOnOnsiteTicket &&
+        !returnOnsiteProgressToL2 &&
+        (requestedStatus === "Escalated to L2" || requestedStatus === "Escalated to L3" || requestedEscalationLevel === "L2" || requestedEscalationLevel === "L3")) {
+        return (0, http_1.fail)(res, "Use Updates done, progress sent to L2 for onsite tickets assigned by L2.", 403);
     }
     const nextInspection = req.body.l1Inspection ?? existing.l1Inspection;
     const l1InspectionValid = isL1InspectionValid(nextInspection);
@@ -1491,6 +1511,59 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
                 return (0, http_1.fail)(res, assignment.blockedMessage, 400);
             }
             Object.assign(update, assignment);
+        }
+    }
+    if (returnOnsiteProgressToL2) {
+        if (!l1ActingOnOnsiteTicket) {
+            return (0, http_1.fail)(res, "Only the onsite L1 engineer can send onsite progress back to L2.", 403);
+        }
+        const targetL2Id = normalizeText(existing.siteVisitRequestedById ?? existing.siteVisitAssignedById);
+        const targetL2Name = normalizeText(existing.siteVisitRequestedByName ?? existing.siteVisitAssignedByName);
+        if (!targetL2Id && !targetL2Name) {
+            return (0, http_1.fail)(res, "Original L2 requester not found for this onsite ticket.", 400);
+        }
+        const actor = user.name || user.email || "Onsite engineer";
+        const returnNote = normalizeText(req.body.onsiteProgressReturnNote) ||
+            `Onsite progress submitted by ${actor}; ticket returned to L2 for review and closure.`;
+        update.status = "Escalated to L2";
+        update.escalationLevel = "L2";
+        update.assignmentStatus = "Assigned";
+        update.assignedEngineerId = targetL2Id || undefined;
+        update.assignedEngineerName = targetL2Name || undefined;
+        update.engineerName = targetL2Name || undefined;
+        update.escalatedById = user.userId;
+        update.escalatedByName = user.name || user.email;
+        update.escalatedByRole = user.role;
+        update.escalatedAt = serverNow;
+        update.siteVisitCompletedAt = existing.siteVisitCompletedAt ?? serverNow;
+        update.slaPaused = false;
+        update.waitingSince = undefined;
+        update.queuePosition = undefined;
+        workflowHistory.push(createWorkflowHistoryEvent({
+            action: "Onsite progress sent to L2",
+            fromStatus: existing.status,
+            toStatus: "Escalated to L2",
+            user,
+            note: returnNote,
+        }));
+        if (targetL2Id) {
+            extraNotifications.push({
+                id: (0, id_1.generateId)(),
+                type: "complaint_workflow_updated",
+                title: "Onsite progress sent to L2",
+                body: `${existing.productSerialNo || "No serial"} onsite progress submitted by ${actor}. Review and close the ticket.`,
+                entityType: "complaint",
+                entityId: existing.id,
+                meta: {
+                    status: "Escalated to L2",
+                    onsiteEngineerName: existing.siteVisitEngineerName || existing.engineerName,
+                    siteVisitCompletedAt: update.siteVisitCompletedAt,
+                },
+                audienceUserIds: [targetL2Id],
+                readBy: [],
+                createdBy: user.userId,
+                createdAt: serverNow,
+            });
         }
     }
     const desiredStatus = String(req.body.status ?? update.status ?? existing.status);

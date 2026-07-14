@@ -252,6 +252,14 @@ function createWorkflowHistoryEvent(input: {
   };
 }
 
+function isL1ServiceRole(role?: string) {
+  return role === "L1 Engineer" || role === "Backup" || role === "L1 Backup Engineer";
+}
+
+function isOnsiteTicket(complaint: Pick<Complaint, "siteVisitRequired" | "status">) {
+  return complaint.siteVisitRequired === true || complaint.status === "Assigned for Onsite";
+}
+
 function sortForL1Queue(rows: Complaint[]) {
   return [...rows].sort((a, b) => (
     activeQueueRank(a.status) - activeQueueRank(b.status) ||
@@ -853,8 +861,6 @@ async function complaintRoleScope(user: AuthUser): Promise<Record<string, unknow
     return {
       $or: [
         ...ownAssignmentFilters,
-        { siteVisitRequired: true, siteVisitEngineerId: user.userId },
-        ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
         { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
         ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
       ],
@@ -922,8 +928,6 @@ async function canAccessComplaint(user: AuthUser, complaint: Complaint): Promise
     if (user.role === "Backup") return ownMatch;
     return (
       ownMatch ||
-      (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
-      (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
       (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name)))
     );
   }
@@ -1426,6 +1430,12 @@ router.put(
     if (!status) return fail(res, "status is required");
     const updatedAt = new Date();
     const nextStatus = String(status);
+    if (isL1ServiceRole(user.role) && isOnsiteTicket(existing) && isClosedComplaintStatus(nextStatus)) {
+      return fail(res, "Onsite tickets assigned by L2 can only be closed by L2 after reviewing the onsite progress.", 403);
+    }
+    if (isL1ServiceRole(user.role) && isOnsiteTicket(existing) && (nextStatus === "Escalated to L2" || nextStatus === "Escalated to L3")) {
+      return fail(res, "Use Updates done, progress sent to L2 for onsite tickets assigned by L2.", 403);
+    }
     const escalationReason = normalizeText(req.body.escalationReason);
     const escalationNotes = normalizeText(req.body.escalationNotes);
     const noteSuffix = nextStatus === "Escalated to L3"
@@ -1480,6 +1490,21 @@ router.put(
     const user = (req as any).user as AuthUser;
     if (!(await canAccessComplaint(user, existing))) {
       return fail(res, "Access denied: insufficient permissions", 403);
+    }
+
+    const returnOnsiteProgressToL2 = Boolean(req.body.returnOnsiteProgressToL2);
+    const l1ActingOnOnsiteTicket = isL1ServiceRole(user.role) && isOnsiteTicket(existing);
+    const requestedStatus = String(req.body.status ?? "");
+    const requestedEscalationLevel = String(req.body.escalationLevel ?? "");
+    if (l1ActingOnOnsiteTicket && isClosedComplaintStatus(requestedStatus)) {
+      return fail(res, "Onsite tickets assigned by L2 can only be closed by L2 after reviewing the onsite progress.", 403);
+    }
+    if (
+      l1ActingOnOnsiteTicket &&
+      !returnOnsiteProgressToL2 &&
+      (requestedStatus === "Escalated to L2" || requestedStatus === "Escalated to L3" || requestedEscalationLevel === "L2" || requestedEscalationLevel === "L3")
+    ) {
+      return fail(res, "Use Updates done, progress sent to L2 for onsite tickets assigned by L2.", 403);
     }
 
     const nextInspection = req.body.l1Inspection ?? existing.l1Inspection;
@@ -1736,6 +1761,62 @@ router.put(
           return fail(res, assignment.blockedMessage, 400);
         }
         Object.assign(update, assignment);
+      }
+    }
+
+    if (returnOnsiteProgressToL2) {
+      if (!l1ActingOnOnsiteTicket) {
+        return fail(res, "Only the onsite L1 engineer can send onsite progress back to L2.", 403);
+      }
+      const targetL2Id = normalizeText(existing.siteVisitRequestedById ?? existing.siteVisitAssignedById);
+      const targetL2Name = normalizeText(existing.siteVisitRequestedByName ?? existing.siteVisitAssignedByName);
+      if (!targetL2Id && !targetL2Name) {
+        return fail(res, "Original L2 requester not found for this onsite ticket.", 400);
+      }
+      const actor = user.name || user.email || "Onsite engineer";
+      const returnNote = normalizeText(req.body.onsiteProgressReturnNote) ||
+        `Onsite progress submitted by ${actor}; ticket returned to L2 for review and closure.`;
+
+      update.status = "Escalated to L2";
+      update.escalationLevel = "L2";
+      update.assignmentStatus = "Assigned";
+      update.assignedEngineerId = targetL2Id || undefined;
+      update.assignedEngineerName = targetL2Name || undefined;
+      update.engineerName = targetL2Name || undefined;
+      update.escalatedById = user.userId;
+      update.escalatedByName = user.name || user.email;
+      update.escalatedByRole = user.role;
+      update.escalatedAt = serverNow;
+      update.siteVisitCompletedAt = existing.siteVisitCompletedAt ?? serverNow;
+      update.slaPaused = false;
+      update.waitingSince = undefined;
+      update.queuePosition = undefined;
+
+      workflowHistory.push(createWorkflowHistoryEvent({
+        action: "Onsite progress sent to L2",
+        fromStatus: existing.status,
+        toStatus: "Escalated to L2",
+        user,
+        note: returnNote,
+      }));
+      if (targetL2Id) {
+        extraNotifications.push({
+          id: generateId(),
+          type: "complaint_workflow_updated",
+          title: "Onsite progress sent to L2",
+          body: `${existing.productSerialNo || "No serial"} onsite progress submitted by ${actor}. Review and close the ticket.`,
+          entityType: "complaint",
+          entityId: existing.id,
+          meta: {
+            status: "Escalated to L2",
+            onsiteEngineerName: existing.siteVisitEngineerName || existing.engineerName,
+            siteVisitCompletedAt: update.siteVisitCompletedAt,
+          },
+          audienceUserIds: [targetL2Id],
+          readBy: [],
+          createdBy: user.userId,
+          createdAt: serverNow,
+        });
       }
     }
 
