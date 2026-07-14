@@ -317,6 +317,26 @@ function engineerIdentityFilter(engineerId: string, engineerName?: string) {
   return { $or: or };
 }
 
+async function currentEngineerAssignmentFilters(user: AuthUser, role: "L1" | "L2" | "L3" | "Backup") {
+  const ownMaster = await findEngineerMasterForUser(user, role);
+  const or: Record<string, unknown>[] = [];
+  const seen = new Set<string>();
+  const add = (field: "assignedEngineerId" | "assignedEngineerName", value: unknown) => {
+    const normalized = normalizeText(value);
+    if (!normalized) return;
+    const key = `${field}:${normalized}`;
+    if (seen.has(key)) return;
+    seen.add(key);
+    or.push({ [field]: normalized });
+  };
+
+  add("assignedEngineerId", user.userId);
+  add("assignedEngineerId", ownMaster?.id);
+  add("assignedEngineerName", user.name);
+  add("assignedEngineerName", ownMaster?.name);
+  return or;
+}
+
 async function engineerTicketCounts(engineerId: string, engineerName?: string, excludeComplaintId?: string) {
   const c = await getCollections();
   // Backup-overflow tickets live in the engineer's dedicated "L1 Backup" queue and must not
@@ -829,30 +849,22 @@ async function complaintRoleScope(user: AuthUser): Promise<Record<string, unknow
     // directory (see buildServiceAssignment), never the real auth user id, and
     // assignedEngineerName is only reliable if it matches user.name byte-for-byte. Resolve
     // this engineer's own directory record so directory-id matching also works.
-    const ownMaster = await findEngineerMasterForUser(user, "L1");
+    const ownAssignmentFilters = await currentEngineerAssignmentFilters(user, "L1");
     return {
       $or: [
-        { assignedEngineerId: user.userId },
-        ...(ownMaster ? [{ assignedEngineerId: ownMaster.id }] : []),
-        ...(user.name ? [{ assignedEngineerName: user.name }] : []),
+        ...ownAssignmentFilters,
         { siteVisitRequired: true, siteVisitEngineerId: user.userId },
         ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
         { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
         ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
-        { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
       ],
     };
   }
 
   if (user.role === "Backup") {
-    const ownMaster = await findEngineerMasterForUser(user, "L1");
+    const ownAssignmentFilters = await currentEngineerAssignmentFilters(user, "L1");
     return {
-      $or: [
-        { assignedEngineerId: user.userId },
-        ...(ownMaster ? [{ assignedEngineerId: ownMaster.id }] : []),
-        ...(user.name ? [{ assignedEngineerName: user.name }] : []),
-        { assignmentStatus: "Waiting", status: "Waiting Lobby", $or: [{ escalationLevel: "L1" }, { escalationLevel: { $exists: false } }] },
-      ],
+      $or: ownAssignmentFilters,
     };
   }
 
@@ -900,12 +912,12 @@ async function applyComplaintRoleScope(filter: Record<string, unknown>, user: Au
 async function canAccessComplaint(user: AuthUser, complaint: Complaint): Promise<boolean> {
   if (!requireComplaintTypeAccess(user, String(complaint.type))) return false;
   if (user.role === "L1 Engineer" || user.role === "Backup") {
-    const ownMaster = await findEngineerMasterForUser(user, "L1");
+    const ownAssignmentFilters = await currentEngineerAssignmentFilters(user, "L1");
     const ownMatch = (
-      complaint.assignedEngineerId === user.userId ||
-      (Boolean(ownMaster) && complaint.assignedEngineerId === ownMaster!.id) ||
-      (Boolean(user.name) && complaint.assignedEngineerName === user.name) ||
-      (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && normalizeServiceLevel(complaint.escalationLevel) === "L1")
+      ownAssignmentFilters.some((filter) => (
+        ("assignedEngineerId" in filter && complaint.assignedEngineerId === filter.assignedEngineerId) ||
+        ("assignedEngineerName" in filter && complaint.assignedEngineerName === filter.assignedEngineerName)
+      ))
     );
     if (user.role === "Backup") return ownMatch;
     return (
