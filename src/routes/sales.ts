@@ -283,11 +283,15 @@ router.put("/:id", authenticate, requireAnyPermission("sales:entry", "dispatch:m
     if (!customer) return fail(res, "Customer not found", 404);
   }
 
-  let finalReferenceNo = "";
-  try {
-    finalReferenceNo = await resolveUniquePiNumber(c, referenceNo, saleDate, String(id));
-  } catch (err) {
-    return fail(res, err instanceof Error ? err.message : "Invalid PI number");
+  const requestedReferenceNo = String(referenceNo ?? "").trim();
+  const referenceNoUnchanged = requestedReferenceNo && requestedReferenceNo === (existing.referenceNo ?? "").trim();
+  let finalReferenceNo = existing.referenceNo;
+  if (!referenceNoUnchanged || isPlaceholderPiNumber(existing.referenceNo ?? "")) {
+    try {
+      finalReferenceNo = await resolveUniquePiNumber(c, referenceNo, saleDate, String(id));
+    } catch (err) {
+      return fail(res, err instanceof Error ? err.message : "Invalid PI number");
+    }
   }
 
   const normalizedNewSerial = normalizeSerialNumber(serialNumber);
