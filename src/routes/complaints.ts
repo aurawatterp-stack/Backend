@@ -1652,6 +1652,9 @@ router.put(
     }
     if (CLOSED_COMPLAINT_STATUSES.includes(String(req.body.status) as (typeof CLOSED_COMPLAINT_STATUSES)[number])) {
       update.closedAt = serverNow;
+      // Once a ticket is closed the SLA clock must stop for good — freeze the timer at
+      // close time so no consumer keeps counting the ticket as a live/overdue SLA.
+      update.slaPaused = true;
       if (siteVisitActive && !existing.siteVisitCompletedAt) {
         update.siteVisitCompletedAt = serverNow;
       }

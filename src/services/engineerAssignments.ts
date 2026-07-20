@@ -402,15 +402,97 @@ export async function findEngineerMasterForUser(user: { email?: string; name?: s
   const c = await getCollections();
   const email = normalizeText(user.email);
   const name = normalizeText(user.name);
-  if (email) {
-    const byEmail = await c.engineerMasters.findOne({ role, email: exactMatchRegex(email) });
-    if (byEmail) return byEmail;
+  const filters: Array<Record<string, unknown>> = [];
+  if (email) filters.push({ role, email: exactMatchRegex(email) });
+  if (name) filters.push({ role, name: exactMatchRegex(name) });
+  // Prefer active rows: after a rename the old (deactivated) registry row can carry the same
+  // email as the live one, and a bare findOne returns whichever comes first.
+  for (const filter of filters) {
+    const active = await c.engineerMasters.findOne({ ...filter, isActive: { $ne: false } });
+    if (active) return active;
   }
-  if (name) {
-    const byName = await c.engineerMasters.findOne({ role, name: exactMatchRegex(name) });
-    if (byName) return byName;
+  for (const filter of filters) {
+    const any = await c.engineerMasters.findOne(filter);
+    if (any) return any;
   }
   return null;
+}
+
+/**
+ * Moves every reference to an engineer identity onto a new name/role. Engineer_master ids are
+ * derived from the name (`eng-l1-<name-slug>`), so renaming an engineer account changes their id
+ * and silently orphans district assignments, open tickets and their dashboard queue unless all of
+ * those references are migrated together.
+ */
+export async function migrateEngineerIdentity(input: {
+  oldName: string;
+  newName: string;
+  oldRole: EngineerRole;
+  newRole: EngineerRole;
+  email?: string;
+  mobile?: string;
+}) {
+  const c = await getCollections();
+  const oldName = normalizeText(input.oldName);
+  const newName = normalizeText(input.newName);
+  const oldId = engineerMasterId(oldName, input.oldRole);
+  const newId = engineerMasterId(newName, input.newRole);
+  if (!oldName || !newName || oldId === newId) {
+    return { migrated: false, oldId, newId, assignments: 0, complaints: 0 };
+  }
+
+  const now = new Date();
+  const oldMaster = await c.engineerMasters.findOne({ id: oldId });
+
+  await c.engineerMasters.updateOne(
+    { id: newId },
+    {
+      $set: {
+        name: newName,
+        role: input.newRole,
+        email: input.email ?? oldMaster?.email ?? "",
+        mobile: input.mobile ?? oldMaster?.mobile ?? "",
+        isActive: oldMaster?.isActive ?? true,
+        updatedAt: now,
+      },
+      $setOnInsert: { id: newId, createdAt: oldMaster?.createdAt ?? now },
+    },
+    { upsert: true }
+  );
+
+  const assignmentUpdates = await Promise.all([
+    c.engineerAssignments.updateMany({ l1EngineerId: oldId }, { $set: { l1EngineerId: newId, updatedAt: now } }),
+    c.engineerAssignments.updateMany({ l2EngineerId: oldId }, { $set: { l2EngineerId: newId, updatedAt: now } }),
+    c.engineerAssignments.updateMany({ l1BackupEngineerId: oldId }, { $set: { l1BackupEngineerId: newId, updatedAt: now } }),
+  ]);
+
+  const nameRegex = exactMatchRegex(oldName);
+  const complaintUpdates = await Promise.all([
+    c.complaints.updateMany({ assignedEngineerId: oldId }, { $set: { assignedEngineerId: newId } }),
+    c.complaints.updateMany({ assignedEngineerName: nameRegex }, { $set: { assignedEngineerName: newName } }),
+    c.complaints.updateMany({ engineerName: nameRegex }, { $set: { engineerName: newName } }),
+    c.complaints.updateMany({ backupEngineerName: nameRegex }, { $set: { backupEngineerName: newName } }),
+    c.complaints.updateMany({ overflowFromEngineerId: oldId }, { $set: { overflowFromEngineerId: newId } }),
+    c.complaints.updateMany({ overflowFromEngineerName: nameRegex }, { $set: { overflowFromEngineerName: newName } }),
+    c.complaints.updateMany({ replacementEngineerId: oldId }, { $set: { replacementEngineerId: newId } }),
+    c.complaints.updateMany({ replacementEngineerName: nameRegex }, { $set: { replacementEngineerName: newName } }),
+    c.complaints.updateMany({ siteVisitEngineerId: oldId }, { $set: { siteVisitEngineerId: newId } }),
+    c.complaints.updateMany({ siteVisitEngineerName: nameRegex }, { $set: { siteVisitEngineerName: newName } }),
+  ]);
+
+  // The old registry row is fully superseded; deleting it keeps the email-based lookup in
+  // findEngineerMasterForUser from ever resolving to the dead identity again.
+  await c.engineerMasters.deleteOne({ id: oldId });
+  await c.ticketLoads.deleteOne({ engineerId: oldId });
+  await rebuildTicketLoads();
+
+  return {
+    migrated: true,
+    oldId,
+    newId,
+    assignments: assignmentUpdates.reduce((sum, result) => sum + result.modifiedCount, 0),
+    complaints: complaintUpdates.reduce((sum, result) => sum + result.modifiedCount, 0),
+  };
 }
 
 /**

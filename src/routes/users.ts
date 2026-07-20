@@ -5,7 +5,7 @@ import { CONFIG } from "../config";
 import { getCollections } from "../db/collections";
 import { authenticate, requireAnyPermission } from "../middleware/auth";
 import { normalizeRole } from "../rbac";
-import { engineerMasterId, type EngineerRole } from "../services/engineerAssignments";
+import { engineerMasterId, migrateEngineerIdentity, type EngineerRole } from "../services/engineerAssignments";
 import type { User } from "../types";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -155,14 +155,29 @@ router.put("/:id", authenticate, requireAnyPermission("users:manage"), async (re
   const user = { ...existing, ...update };
   const { passwordHash: _, ...safeUser } = user as any;
 
-  // Keep engineer_master in step: if this account's identity (name/role) changed, the old
-  // engineer_master row is now orphaned under the old name/role — deactivate it. Then sync the
-  // (possibly new) identity's active state to match this account's isActive.
+  // Keep engineer_master in step: if this account's identity (name/role) changed, every reference
+  // to the old identity — engineer_master row, district assignments, complaint tickets — must move
+  // with it, because engineer ids are derived from the name. Otherwise the renamed engineer stops
+  // receiving tickets and their dashboard goes empty. Then sync the (possibly new) identity's
+  // active state to match this account's isActive.
   const nextName = update.name ?? existing.name;
   const nextRole = update.role ?? existing.role;
   const nextIsActive = update.isActive ?? existing.isActive;
   if (existing.name !== nextName || existing.role !== nextRole) {
-    await syncEngineerMasterActive({ name: existing.name, role: existing.role }, false);
+    const oldEngineerRole = USER_ROLE_TO_ENGINEER_ROLE[existing.role];
+    const newEngineerRole = USER_ROLE_TO_ENGINEER_ROLE[nextRole];
+    if (oldEngineerRole && newEngineerRole) {
+      await migrateEngineerIdentity({
+        oldName: existing.name,
+        newName: nextName,
+        oldRole: oldEngineerRole,
+        newRole: newEngineerRole,
+        email: existing.email,
+        mobile: update.mobile ?? existing.mobile,
+      });
+    } else {
+      await syncEngineerMasterActive({ name: existing.name, role: existing.role }, false);
+    }
   }
   await syncEngineerMasterActive(
     { name: nextName, role: nextRole, email: existing.email, mobile: update.mobile ?? existing.mobile },

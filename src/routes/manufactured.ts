@@ -9,6 +9,15 @@ import { updateSerialStatus } from "../utils/serialLifecycle";
 
 const router: Router = express.Router();
 
+// BOM series and material names are entered/edited as free text in different modules (Series BOM
+// Master, Raw Materials, Products). Matching them with strict equality silently breaks the
+// manufacturing deduction whenever the casing or spacing differs (e.g. "PCB " vs "PCB"). Match on a
+// trimmed, case-insensitive, fully-anchored basis so mapped BOMs deduct reliably.
+function ciExact(value: string): RegExp {
+  const escaped = String(value ?? "").trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  return new RegExp(`^${escaped}$`, "i");
+}
+
 function normalizeBomUsage(input: unknown): NonNullable<ManufacturedProduct["bomUsage"]> {
   if (!Array.isArray(input)) return [];
   return input
@@ -225,7 +234,7 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
   const duplicate = await c.manufactured.findOne({ serialNumber: resolvedSerial.serialNumber }, { projection: { id: 1 } });
   if (duplicate) return fail(res, "This serial number already exists");
 
-  const seriesBom = await c.boms.findOne({ series: productSeries });
+  const seriesBom = await c.boms.findOne({ series: ciExact(productSeries) });
   const bomUsage: NonNullable<ManufacturedProduct["bomUsage"]> = [];
 
   if (seriesBom && Array.isArray(seriesBom.items)) {
@@ -237,7 +246,7 @@ router.post("/", authenticate, requireAnyPermission("inventory:manufactured"), a
       if (requiredQty <= 0) continue;
 
       const rawMaterials = await c.rawMaterials
-        .find({ productSeriesId: productSeries, materialName: item.materialName, quantityAvailable: { $gt: 0 } })
+        .find({ productSeriesId: ciExact(productSeries), materialName: ciExact(item.materialName), quantityAvailable: { $gt: 0 } })
         .sort({ dateReceived: 1, createdAt: 1 })
         .toArray();
 
