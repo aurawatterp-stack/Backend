@@ -477,6 +477,7 @@ export type ComplaintStatus =
   | "Replacement Requested"
   | "Awaiting Dispatch"
   | "Dispatch in Progress"
+  | "On Hold"
   | "Resolved by Aurawatt"
   | "Pending with Suppliers"
   | "Resolved by Suppliers"
@@ -607,6 +608,13 @@ export type Complaint = {
   slaStartedAt?: Date;
   slaDueAt?: Date;
   slaPaused?: boolean;
+  holdReason?: string;
+  heldAt?: Date;
+  heldById?: string;
+  heldByName?: string;
+  statusBeforeHold?: ComplaintStatus;
+  /** SLA time left when the ticket went on hold, so resuming stays fair. */
+  slaRemainingMsAtHold?: number;
   queuePosition?: number;
   initialAction?: string;
   trackingNotes?: string;
@@ -781,3 +789,20 @@ export type ReplacementRequest = {
   courierDetails?: string;
 };
 
+
+export type SupportVideoLanguage = "hindi" | "english";
+
+export type SupportVideo = {
+  id: string;
+  language: SupportVideoLanguage;
+  url: string;
+  publicId?: string;
+  format?: string;
+  durationSeconds?: number;
+  bytes?: number;
+  originalFileName?: string;
+  title?: string;
+  updatedBy?: string;
+  createdAt: Date;
+  updatedAt: Date;
+};

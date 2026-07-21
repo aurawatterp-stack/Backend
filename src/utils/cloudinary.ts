@@ -19,13 +19,47 @@ function signature(params: Record<string, string>) {
     .digest("hex");
 }
 
+export type CloudinaryDirectUploadTicket = {
+  uploadUrl: string;
+  cloudName: string;
+  apiKey: string;
+  timestamp: string;
+  folder: string;
+  signature: string;
+};
+
+/**
+ * Build signed params so the browser can upload straight to Cloudinary.
+ *
+ * Videos are far larger than the 4.5 MB request body cap on our serverless
+ * host, so they must bypass this API entirely instead of being proxied
+ * through `uploadBufferToCloudinary`.
+ */
+export function createDirectUploadTicket(folder: string, resourceType: "video" | "image" | "auto" = "auto"): CloudinaryDirectUploadTicket {
+  assertCloudinaryConfigured();
+
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  return {
+    uploadUrl: `https://api.cloudinary.com/v1_1/${CONFIG.CLOUDINARY_CLOUD_NAME}/${resourceType}/upload`,
+    cloudName: CONFIG.CLOUDINARY_CLOUD_NAME,
+    apiKey: CONFIG.CLOUDINARY_API_KEY,
+    timestamp,
+    folder,
+    signature: signature({ folder, timestamp }),
+  };
+}
+
+function assertCloudinaryConfigured() {
+  if (!CONFIG.CLOUDINARY_CLOUD_NAME || !CONFIG.CLOUDINARY_API_KEY || !CONFIG.CLOUDINARY_API_SECRET) {
+    throw new Error("Cloudinary is not configured. Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.");
+  }
+}
+
 export async function uploadBufferToCloudinary(
   file: Express.Multer.File,
   folder: string
 ): Promise<CloudinaryUploadResult> {
-  if (!CONFIG.CLOUDINARY_CLOUD_NAME || !CONFIG.CLOUDINARY_API_KEY || !CONFIG.CLOUDINARY_API_SECRET) {
-    throw new Error("Cloudinary is not configured. Add CLOUDINARY_CLOUD_NAME, CLOUDINARY_API_KEY and CLOUDINARY_API_SECRET.");
-  }
+  assertCloudinaryConfigured();
 
   const timestamp = Math.floor(Date.now() / 1000).toString();
   const form = new FormData();
@@ -57,4 +91,24 @@ export async function uploadBufferToCloudinary(
     resourceType: payload?.resource_type ? String(payload.resource_type) : undefined,
     format: payload?.format ? String(payload.format) : undefined,
   };
+}
+
+/** Best-effort removal of a replaced asset so old uploads don't accumulate. */
+export async function destroyCloudinaryAsset(publicId: string, resourceType: "video" | "image" = "video") {
+  assertCloudinaryConfigured();
+
+  const timestamp = Math.floor(Date.now() / 1000).toString();
+  const form = new FormData();
+  form.set("public_id", publicId);
+  form.set("api_key", CONFIG.CLOUDINARY_API_KEY);
+  form.set("timestamp", timestamp);
+  form.set("signature", signature({ public_id: publicId, timestamp }));
+
+  const response = await fetch(
+    `https://api.cloudinary.com/v1_1/${CONFIG.CLOUDINARY_CLOUD_NAME}/${resourceType}/destroy`,
+    { method: "POST", body: form }
+  );
+  if (!response.ok) {
+    throw new Error(`Cloudinary destroy failed (${response.status})`);
+  }
 }

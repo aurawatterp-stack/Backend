@@ -1,9 +1,10 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.ONSITE_CAPACITY_MESSAGE = exports.ENGINEER_CAPACITY_MESSAGE = exports.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE = exports.CLOSED_COMPLAINT_STATUSES = exports.LOBBY_TICKET_STATUSES = exports.ACTIVE_TICKET_STATUSES = exports.MAX_WAITING_LOBBY_TICKETS = exports.MAX_ACTIVE_SERVICE_TICKETS = void 0;
+exports.ONSITE_CAPACITY_MESSAGE = exports.ENGINEER_CAPACITY_MESSAGE = exports.ACTIVE_COMPLAINT_DUPLICATE_MESSAGE = exports.CLOSED_COMPLAINT_STATUSES = exports.HOLD_TICKET_STATUS = exports.LOBBY_TICKET_STATUSES = exports.ACTIVE_TICKET_STATUSES = exports.MAX_WAITING_LOBBY_TICKETS = exports.MAX_ACTIVE_SERVICE_TICKETS = void 0;
 exports.normalizeComplaintSerialKey = normalizeComplaintSerialKey;
 exports.isClosedComplaintStatus = isClosedComplaintStatus;
 exports.isActiveComplaintStatus = isActiveComplaintStatus;
+exports.isOnHoldComplaint = isOnHoldComplaint;
 exports.isWaitingLobbyComplaint = isWaitingLobbyComplaint;
 exports.isActiveWorkComplaint = isActiveWorkComplaint;
 exports.MAX_ACTIVE_SERVICE_TICKETS = 5;
@@ -28,6 +29,12 @@ exports.LOBBY_TICKET_STATUSES = [
     "Waiting Queue",
     "Waiting Lobby",
 ];
+/**
+ * Deliberately excluded from ACTIVE_TICKET_STATUSES and LOBBY_TICKET_STATUSES:
+ * a held ticket must not consume the engineer's 5 active / 5 lobby capacity, so
+ * putting a blocked ticket on hold frees a slot for the next waiting ticket.
+ */
+exports.HOLD_TICKET_STATUS = "On Hold";
 exports.CLOSED_COMPLAINT_STATUSES = [
     "Resolved by Aurawatt",
     "Resolved by Suppliers",
@@ -43,6 +50,9 @@ function isClosedComplaintStatus(status) {
 }
 function isActiveComplaintStatus(status) {
     return !isClosedComplaintStatus(status);
+}
+function isOnHoldComplaint(complaint) {
+    return complaint.status === exports.HOLD_TICKET_STATUS;
 }
 function isWaitingLobbyComplaint(complaint) {
     return complaint.assignmentStatus === "Waiting" && exports.LOBBY_TICKET_STATUSES.includes(complaint.status);

@@ -27,6 +27,7 @@ const notifications_1 = __importDefault(require("./routes/notifications"));
 const roles_1 = __importDefault(require("./routes/roles"));
 const engineerAssignments_1 = __importDefault(require("./routes/engineerAssignments"));
 const geo_1 = __importDefault(require("./routes/geo"));
+const supportVideos_1 = __importDefault(require("./routes/supportVideos"));
 const app = (0, express_1.default)();
 function createCorsOptions() {
     const allowedOrigins = [
@@ -95,6 +96,7 @@ app.use("/api/notifications", notifications_1.default);
 app.use("/api/roles", roles_1.default);
 app.use("/api/engineer-assignments", engineerAssignments_1.default);
 app.use("/api/geo", geo_1.default);
+app.use("/api/support-videos", supportVideos_1.default);
 // 404 fallback
 app.use((req, res) => {
     res.status(404).json({

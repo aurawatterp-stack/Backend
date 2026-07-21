@@ -10,6 +10,14 @@ const http_1 = require("../utils/http");
 const id_1 = require("../utils/id");
 const serialLifecycle_1 = require("../utils/serialLifecycle");
 const router = express_1.default.Router();
+// BOM series and material names are entered/edited as free text in different modules (Series BOM
+// Master, Raw Materials, Products). Matching them with strict equality silently breaks the
+// manufacturing deduction whenever the casing or spacing differs (e.g. "PCB " vs "PCB"). Match on a
+// trimmed, case-insensitive, fully-anchored basis so mapped BOMs deduct reliably.
+function ciExact(value) {
+    const escaped = String(value ?? "").trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+    return new RegExp(`^${escaped}$`, "i");
+}
 function normalizeBomUsage(input) {
     if (!Array.isArray(input))
         return [];
@@ -195,7 +203,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
     const duplicate = await c.manufactured.findOne({ serialNumber: resolvedSerial.serialNumber }, { projection: { id: 1 } });
     if (duplicate)
         return (0, http_1.fail)(res, "This serial number already exists");
-    const seriesBom = await c.boms.findOne({ series: productSeries });
+    const seriesBom = await c.boms.findOne({ series: ciExact(productSeries) });
     const bomUsage = [];
     if (seriesBom && Array.isArray(seriesBom.items)) {
         const reserved = new Map();
@@ -205,7 +213,7 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("inventor
             if (requiredQty <= 0)
                 continue;
             const rawMaterials = await c.rawMaterials
-                .find({ productSeriesId: productSeries, materialName: item.materialName, quantityAvailable: { $gt: 0 } })
+                .find({ productSeriesId: ciExact(productSeries), materialName: ciExact(item.materialName), quantityAvailable: { $gt: 0 } })
                 .sort({ dateReceived: 1, createdAt: 1 })
                 .toArray();
             let remainingRequired = requiredQty;

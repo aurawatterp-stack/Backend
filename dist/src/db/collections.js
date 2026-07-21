@@ -31,5 +31,6 @@ async function getCollections() {
         inwardMaster: db.collection("inward_master"),
         inwardItemDetails: db.collection("inward_item_details"),
         counters: db.collection("counters"),
+        supportVideos: db.collection("support_videos"),
     };
 }

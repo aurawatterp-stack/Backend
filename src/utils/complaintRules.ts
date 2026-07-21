@@ -25,6 +25,13 @@ export const LOBBY_TICKET_STATUSES = [
   "Waiting Lobby",
 ] as const;
 
+/**
+ * Deliberately excluded from ACTIVE_TICKET_STATUSES and LOBBY_TICKET_STATUSES:
+ * a held ticket must not consume the engineer's 5 active / 5 lobby capacity, so
+ * putting a blocked ticket on hold frees a slot for the next waiting ticket.
+ */
+export const HOLD_TICKET_STATUS = "On Hold";
+
 export const CLOSED_COMPLAINT_STATUSES = [
   "Resolved by Aurawatt",
   "Resolved by Suppliers",
@@ -46,6 +53,10 @@ export function isClosedComplaintStatus(status: unknown) {
 
 export function isActiveComplaintStatus(status: unknown) {
   return !isClosedComplaintStatus(status);
+}
+
+export function isOnHoldComplaint(complaint: Pick<Complaint, "status">) {
+  return complaint.status === HOLD_TICKET_STATUS;
 }
 
 export function isWaitingLobbyComplaint(complaint: Pick<Complaint, "assignmentStatus" | "status">) {

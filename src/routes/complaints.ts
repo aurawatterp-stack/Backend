@@ -22,8 +22,11 @@ import {
   ONSITE_CAPACITY_MESSAGE,
   ACTIVE_TICKET_STATUSES,
   LOBBY_TICKET_STATUSES,
+  HOLD_TICKET_STATUS,
   isActiveWorkComplaint,
   isClosedComplaintStatus,
+  isOnHoldComplaint,
+  isWaitingLobbyComplaint,
   normalizeComplaintSerialKey,
 } from "../utils/complaintRules";
 import { isValidEmailAddress, normalizeEmailAddress } from "../utils/validation";
@@ -1474,6 +1477,166 @@ router.put(
       ], normalizeServiceLevel(existing.escalationLevel));
     }
     return ok(res, { ...existing, status, updatedAt });
+  }
+);
+
+/**
+ * PUT /api/complaints/:id/hold — park a blocked ticket.
+ *
+ * Real-world case: the customer is not at home, so the engineer cannot make
+ * progress. A held ticket leaves the 5-active / 5-lobby capacity counters, which
+ * frees a slot for the next waiting ticket instead of the engineer sitting
+ * blocked at full capacity. SLA is paused because the delay is on the customer
+ * side, and the remaining time is stored so resuming stays fair.
+ */
+router.put(
+  "/:id/hold",
+  authenticate,
+  requireAnyPermission("complaints:consumer", "complaints:supplier"),
+  async (req: Request, res: Response) => {
+    const c = await getCollections();
+    const id = req.params.id;
+    const existing = await c.complaints.findOne({ id });
+    if (!existing) return fail(res, "Complaint not found", 404);
+    const user = (req as any).user as AuthUser;
+    if (!(await canAccessComplaint(user, existing))) {
+      return fail(res, "Access denied: insufficient permissions", 403);
+    }
+
+    const holdReason = normalizeText(req.body?.holdReason);
+    if (!holdReason) return fail(res, "A hold reason is required");
+    if (isOnHoldComplaint(existing)) return fail(res, "This ticket is already on hold");
+    if (isClosedComplaintStatus(existing.status)) return fail(res, "A closed ticket cannot be put on hold");
+    if (isWaitingLobbyComplaint(existing)) {
+      return fail(res, "Waiting Lobby tickets cannot be held. Hold applies to active work only.");
+    }
+
+    const now = new Date();
+    const slaRemainingMs = existing.slaDueAt
+      ? Math.max(0, new Date(existing.slaDueAt).getTime() - now.getTime())
+      : undefined;
+    const event = createWorkflowHistoryEvent({
+      action: "Ticket put on hold",
+      fromStatus: existing.status,
+      toStatus: HOLD_TICKET_STATUS,
+      user,
+      note: `Ticket put on hold. Reason: ${holdReason}`,
+    });
+
+    await c.complaints.updateOne(
+      { id },
+      {
+        $set: {
+          status: HOLD_TICKET_STATUS,
+          statusBeforeHold: existing.status,
+          holdReason,
+          heldAt: now,
+          heldById: user.userId,
+          heldByName: user.name || user.email,
+          slaPaused: true,
+          ...(slaRemainingMs === undefined ? {} : { slaRemainingMsAtHold: slaRemainingMs }),
+          updatedAt: now,
+        },
+        $unset: { slaDueAt: "" },
+        $push: { workflowHistory: event },
+      }
+    );
+
+    // The freed active slot should immediately pull the next waiting ticket in.
+    if (isActiveWorkComplaint(existing)) {
+      await releaseNextWaitingTicket([
+        { engineerId: existing.assignedEngineerId, engineerName: existing.assignedEngineerName },
+        { engineerId: user.userId, engineerName: user.name },
+      ], normalizeServiceLevel(existing.escalationLevel));
+    }
+    if (existing.assignedEngineerId) {
+      try {
+        await refreshTicketLoadForAssignment(existing.assignedEngineerId, existing.assignedEngineerName);
+      } catch (err) {
+        console.warn("Failed to refresh engineer load after hold:", err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    return ok(res, { ...existing, status: HOLD_TICKET_STATUS, holdReason, heldAt: now, updatedAt: now });
+  }
+);
+
+/**
+ * PUT /api/complaints/:id/unhold — move a held ticket back into the work queue.
+ *
+ * Used when a ticket was held by mistake. If the engineer's active queue is
+ * already full the ticket joins the waiting lobby rather than becoming a 6th
+ * active ticket, so the capacity rule still holds.
+ */
+router.put(
+  "/:id/unhold",
+  authenticate,
+  requireAnyPermission("complaints:consumer", "complaints:supplier"),
+  async (req: Request, res: Response) => {
+    const c = await getCollections();
+    const id = req.params.id;
+    const existing = await c.complaints.findOne({ id });
+    if (!existing) return fail(res, "Complaint not found", 404);
+    const user = (req as any).user as AuthUser;
+    if (!(await canAccessComplaint(user, existing))) {
+      return fail(res, "Access denied: insufficient permissions", 403);
+    }
+    if (!isOnHoldComplaint(existing)) return fail(res, "This ticket is not on hold");
+
+    const now = new Date();
+    const engineerId = normalizeText(existing.assignedEngineerId);
+    const engineerName = normalizeText(existing.assignedEngineerName);
+    const activeCount = await c.complaints.countDocuments({
+      ...engineerIdentityFilter(engineerId, engineerName || undefined),
+      status: { $in: [...ACTIVE_TICKET_STATUSES] },
+      id: { $ne: String(id) },
+    });
+    const hasActiveSlot = activeCount < MAX_ACTIVE_SERVICE_TICKETS;
+
+    const restoredStatus = hasActiveSlot
+      ? ((existing.statusBeforeHold as Complaint["status"]) || "Assigned to Engineer")
+      : ("Waiting Lobby" as Complaint["status"]);
+    const event = createWorkflowHistoryEvent({
+      action: "Hold released",
+      fromStatus: HOLD_TICKET_STATUS,
+      toStatus: restoredStatus,
+      user,
+      note: hasActiveSlot
+        ? "Hold released; ticket moved back to active work."
+        : "Hold released; active queue is full so the ticket joined the waiting lobby.",
+    });
+
+    const set: Record<string, unknown> = {
+      status: restoredStatus,
+      assignmentStatus: hasActiveSlot ? "Assigned" : "Waiting",
+      slaPaused: !hasActiveSlot,
+      updatedAt: now,
+    };
+    if (hasActiveSlot && existing.slaRemainingMsAtHold !== undefined) {
+      set.slaDueAt = new Date(now.getTime() + existing.slaRemainingMsAtHold);
+    }
+    if (!hasActiveSlot) {
+      set.waitingSince = existing.waitingSince ?? now;
+    }
+
+    await c.complaints.updateOne(
+      { id },
+      {
+        $set: set,
+        $unset: { holdReason: "", heldAt: "", heldById: "", heldByName: "", statusBeforeHold: "", slaRemainingMsAtHold: "" },
+        $push: { workflowHistory: event },
+      }
+    );
+
+    if (existing.assignedEngineerId) {
+      try {
+        await refreshTicketLoadForAssignment(existing.assignedEngineerId, existing.assignedEngineerName);
+      } catch (err) {
+        console.warn("Failed to refresh engineer load after unhold:", err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    return ok(res, { ...existing, status: restoredStatus, updatedAt: now });
   }
 );
 

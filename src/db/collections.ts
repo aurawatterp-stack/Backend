@@ -27,6 +27,7 @@ import type {
   InwardMaster,
   InwardItemDetail,
   Counter,
+  SupportVideo,
 } from "../types";
 import { getMongoDb } from "./mongo";
 
@@ -57,6 +58,7 @@ export type Collections = {
   inwardMaster: Collection<InwardMaster>;
   inwardItemDetails: Collection<InwardItemDetail>;
   counters: Collection<Counter>;
+  supportVideos: Collection<SupportVideo>;
 };
 
 export async function getCollections(): Promise<Collections> {
@@ -88,5 +90,6 @@ export async function getCollections(): Promise<Collections> {
     inwardMaster: db.collection<InwardMaster>("inward_master"),
     inwardItemDetails: db.collection<InwardItemDetail>("inward_item_details"),
     counters: db.collection<Counter>("counters"),
+    supportVideos: db.collection<SupportVideo>("support_videos"),
   };
 }

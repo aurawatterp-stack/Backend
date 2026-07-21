@@ -144,14 +144,30 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("users:
     await c.users.updateOne({ id }, { $set: update });
     const user = { ...existing, ...update };
     const { passwordHash: _, ...safeUser } = user;
-    // Keep engineer_master in step: if this account's identity (name/role) changed, the old
-    // engineer_master row is now orphaned under the old name/role — deactivate it. Then sync the
-    // (possibly new) identity's active state to match this account's isActive.
+    // Keep engineer_master in step: if this account's identity (name/role) changed, every reference
+    // to the old identity — engineer_master row, district assignments, complaint tickets — must move
+    // with it, because engineer ids are derived from the name. Otherwise the renamed engineer stops
+    // receiving tickets and their dashboard goes empty. Then sync the (possibly new) identity's
+    // active state to match this account's isActive.
     const nextName = update.name ?? existing.name;
     const nextRole = update.role ?? existing.role;
     const nextIsActive = update.isActive ?? existing.isActive;
     if (existing.name !== nextName || existing.role !== nextRole) {
-        await syncEngineerMasterActive({ name: existing.name, role: existing.role }, false);
+        const oldEngineerRole = USER_ROLE_TO_ENGINEER_ROLE[existing.role];
+        const newEngineerRole = USER_ROLE_TO_ENGINEER_ROLE[nextRole];
+        if (oldEngineerRole && newEngineerRole) {
+            await (0, engineerAssignments_1.migrateEngineerIdentity)({
+                oldName: existing.name,
+                newName: nextName,
+                oldRole: oldEngineerRole,
+                newRole: newEngineerRole,
+                email: existing.email,
+                mobile: update.mobile ?? existing.mobile,
+            });
+        }
+        else {
+            await syncEngineerMasterActive({ name: existing.name, role: existing.role }, false);
+        }
     }
     await syncEngineerMasterActive({ name: nextName, role: nextRole, email: existing.email, mobile: update.mobile ?? existing.mobile }, Boolean(nextIsActive));
     return (0, http_1.ok)(res, safeUser);
