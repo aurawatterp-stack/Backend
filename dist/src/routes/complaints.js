@@ -423,15 +423,16 @@ async function buildServiceAssignment(input) {
         : undefined;
     function assignmentForEngineer(engineer) {
         if (engineer.activeCount < complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
+            const shouldStartSla = input.level === "L2";
             return {
                 assignedEngineerId: engineer.id,
                 assignedEngineerName: engineer.name,
                 activeTicketCountAtAssignment: engineer.activeCount,
                 assignmentStatus: "Assigned",
                 waitingSince: undefined,
-                slaStartedAt: undefined,
-                slaDueAt: undefined,
-                slaPaused: true,
+                slaStartedAt: shouldStartSla ? now : undefined,
+                slaDueAt: shouldStartSla ? new Date(now.getTime() + slaHours * 60 * 60 * 1000) : undefined,
+                slaPaused: !shouldStartSla,
                 queuePosition: undefined,
                 status: statusByLevel[input.level],
             };
@@ -1678,6 +1679,8 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         update.escalatedByRole = user.role;
         update.escalatedAt = serverNow;
         update.siteVisitCompletedAt = existing.siteVisitCompletedAt ?? serverNow;
+        update.slaStartedAt = existing.slaStartedAt ?? serverNow;
+        update.slaDueAt = existing.slaDueAt ?? new Date(serverNow.getTime() + slaHoursForLevel("L2") * 60 * 60 * 1000);
         update.slaPaused = false;
         update.waitingSince = undefined;
         update.queuePosition = undefined;

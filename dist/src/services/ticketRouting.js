@@ -71,6 +71,8 @@ async function routeCustomerTicketByStateDistrict(input) {
     const primaryLoad = primary ? await countEngineerLoad(primary.id, primary.name) : null;
     const backupLoad = backup ? await countEngineerLoad(backup.id, backup.name) : null;
     const l2Load = l2 ? await countEngineerLoad(l2.id, l2.name) : null;
+    const now = new Date();
+    const l2SlaHours = 48;
     if (primary && primaryLoad && canAcceptL1TicketStrict(primaryLoad)) {
         const isWaiting = primaryLoad.activeTicketCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS;
         return {
@@ -113,6 +115,8 @@ async function routeCustomerTicketByStateDistrict(input) {
     }
     if (l2 && l2Load) {
         const isWaiting = l2Load.activeTicketCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS;
+        const slaStartedAt = isWaiting ? undefined : now;
+        const slaDueAt = isWaiting ? undefined : new Date(now.getTime() + l2SlaHours * 60 * 60 * 1000);
         return {
             assignmentType: "L2 Escalation",
             assignmentReason: isWaiting ? "L2 active queue full, placed in waiting lobby." : "Primary L1 and backup L1 are full.",
@@ -124,9 +128,9 @@ async function routeCustomerTicketByStateDistrict(input) {
             totalTicketCountAtAssignment: l2Load.totalTicketCount,
             assignmentStatus: isWaiting ? "Waiting" : "Assigned",
             status: isWaiting ? "Waiting Lobby" : buildAssignedComplaintStatus("L2 Escalation"),
-            slaStartedAt: undefined,
-            slaDueAt: undefined,
-            slaPaused: true,
+            slaStartedAt,
+            slaDueAt,
+            slaPaused: isWaiting,
             queuePosition: isWaiting ? l2Load.lobbyTicketCount + 1 : undefined,
             waitingSince: isWaiting ? new Date() : undefined,
         };
