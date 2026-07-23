@@ -1652,6 +1652,149 @@ router.put(
   }
 );
 
+/**
+ * PUT /api/complaints/:id/reopen — send a closed ticket back for correction.
+ *
+ * Real-world case: the customer reports that a "resolved" issue is not actually
+ * fixed. An admin re-opens the ticket from the Closed Tickets tab and it returns
+ * to the engineer who closed it (falling back to the assigned engineer for older
+ * tickets that predate closer tracking). The SLA clock restarts fresh for the
+ * correction and the ticket rejoins the engineer's active work so they can finish
+ * the fix and close it again.
+ */
+router.put(
+  "/:id/reopen",
+  authenticate,
+  requireAnyPermission("complaints:consumer", "complaints:supplier"),
+  async (req: Request, res: Response) => {
+    const c = await getCollections();
+    const id = req.params.id;
+    const existing = await c.complaints.findOne({ id });
+    if (!existing) return fail(res, "Complaint not found", 404);
+    const user = (req as any).user as AuthUser;
+    if (user.role !== "Admin") {
+      return fail(res, "Only an administrator can re-open a closed ticket.", 403);
+    }
+    if (!isClosedComplaintStatus(existing.status)) {
+      return fail(res, "Only a closed ticket can be re-opened.");
+    }
+
+    const reopenReason = normalizeText(req.body?.reopenReason);
+
+    // Route the ticket back to whoever closed it; fall back to the engineer it
+    // was assigned to when the closer's id was not captured (older tickets).
+    const targetEngineerId = normalizeText(existing.closedById) || normalizeText(existing.assignedEngineerId);
+    const targetEngineerName = existing.closedById
+      ? (existing.closedByName || existing.assignedEngineerName)
+      : existing.assignedEngineerName;
+
+    const now = new Date();
+    const level = normalizeServiceLevel(existing.escalationLevel);
+    const slaHours = slaHoursForLevel(level);
+
+    // Respect the engineer's 5-active capacity the same way unhold does: if they are
+    // already full, the correction joins their waiting lobby (and is auto-promoted
+    // when a slot frees) instead of becoming an invisible 6th active ticket.
+    let hasActiveSlot = true;
+    if (targetEngineerId) {
+      const activeCount = await c.complaints.countDocuments({
+        ...engineerIdentityFilter(targetEngineerId, targetEngineerName || undefined),
+        status: { $in: [...ACTIVE_TICKET_STATUSES] },
+        id: { $ne: String(id) },
+      });
+      hasActiveSlot = activeCount < MAX_ACTIVE_SERVICE_TICKETS;
+    }
+    const restoredStatus: Complaint["status"] = hasActiveSlot ? "Assigned to Engineer" : "Waiting Lobby";
+
+    const event = createWorkflowHistoryEvent({
+      action: "Ticket re-opened",
+      fromStatus: existing.status,
+      toStatus: restoredStatus,
+      user,
+      note: `Ticket re-opened by admin for further correction.${reopenReason ? ` Reason: ${reopenReason}` : ""}${hasActiveSlot ? "" : " Engineer queue was full, so it joined their waiting lobby."}`,
+    });
+
+    const set: Record<string, unknown> = {
+      status: restoredStatus,
+      assignmentStatus: hasActiveSlot ? "Assigned" : "Waiting",
+      slaPaused: !hasActiveSlot,
+      reopenedAt: now,
+      reopenedById: user.userId,
+      reopenedByName: user.name || user.email,
+      reopenCount: (existing.reopenCount ?? 0) + 1,
+      updatedAt: now,
+    };
+    if (hasActiveSlot) {
+      set.slaStartedAt = now;
+      set.slaDueAt = addHours(now, slaHours);
+    } else {
+      set.waitingSince = now;
+    }
+    if (reopenReason) set.reopenReason = reopenReason;
+    if (targetEngineerId) {
+      set.assignedEngineerId = targetEngineerId;
+      set.assignmentType = existing.assignmentType ?? "Primary L1";
+    }
+    if (targetEngineerName) {
+      set.assignedEngineerName = targetEngineerName;
+      set.engineerName = targetEngineerName;
+    }
+    // Closing clears the serial-uniqueness key; restore it so the ticket is once
+    // again treated as the active complaint for this serial number.
+    const serialKey = normalizeComplaintSerialKey(existing.productSerialNo);
+    if (serialKey) set.productSerialNoKey = serialKey;
+
+    // Closing freezes but does not clear slaDueAt, so drop the stale due date when the
+    // ticket parks in the waiting lobby — promotion assigns a fresh SLA of its own.
+    const unset: Record<string, ""> = { closedAt: "", closedByName: "", closedByRole: "", closedById: "" };
+    if (!hasActiveSlot) unset.slaDueAt = "";
+
+    await c.complaints.updateOne(
+      { id },
+      {
+        $set: set,
+        $unset: unset,
+        $push: { workflowHistory: event },
+      }
+    );
+
+    if (targetEngineerId) {
+      try {
+        await refreshTicketLoadForAssignment(targetEngineerId, targetEngineerName);
+      } catch (err) {
+        console.warn("Failed to refresh engineer load after reopen:", err instanceof Error ? err.message : String(err));
+      }
+      try {
+        const notification: Notification = {
+          id: generateId(),
+          type: "complaint_workflow_updated",
+          title: "Ticket re-opened for correction",
+          body: `${existing.productSerialNo || "No serial"} was re-opened by ${user.name || user.email}. Please review and complete the pending correction.${reopenReason ? ` Reason: ${reopenReason}` : ""}`,
+          entityType: "complaint",
+          entityId: existing.id,
+          meta: {
+            serialNumber: existing.productSerialNo,
+            status: restoredStatus,
+            escalationLevel: existing.escalationLevel,
+            reopenReason: reopenReason || undefined,
+            reopenedByName: user.name || user.email,
+          },
+          audienceUserIds: [targetEngineerId],
+          readBy: [],
+          createdBy: user.userId,
+          createdAt: now,
+        };
+        await c.notifications.insertOne(notification);
+      } catch (err) {
+        console.warn("Failed to insert reopen notification:", err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    const updated = await c.complaints.findOne({ id });
+    return ok(res, updated ?? { ...existing, status: restoredStatus, updatedAt: now });
+  }
+);
+
 /** PUT /api/complaints/:id/service — update service workflow fields */
 router.put(
   "/:id/service",
@@ -1835,6 +1978,9 @@ router.put(
     }
     if (CLOSED_COMPLAINT_STATUSES.includes(String(req.body.status) as (typeof CLOSED_COMPLAINT_STATUSES)[number])) {
       update.closedAt = serverNow;
+      // Capture who closed the ticket so an admin re-open can route it straight
+      // back to that engineer for any pending correction.
+      update.closedById = user.userId;
       // Once a ticket is closed the SLA clock must stop for good — freeze the timer at
       // close time so no consumer keeps counting the ticket as a live/overdue SLA.
       update.slaPaused = true;

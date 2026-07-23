@@ -687,7 +687,13 @@ export type Complaint = {
   closeRemark?: string;
   closedByName?: string;
   closedByRole?: string;
+  closedById?: string;
   closedAt?: Date;
+  reopenedAt?: Date;
+  reopenedById?: string;
+  reopenedByName?: string;
+  reopenReason?: string;
+  reopenCount?: number;
   status: ComplaintStatus;
   raisedBy: string;
   createdAt: Date;
