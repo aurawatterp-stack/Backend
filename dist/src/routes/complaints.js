@@ -962,6 +962,16 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
     if (!requireComplaintTypeAccess(user, String(type))) {
         return (0, http_1.fail)(res, "Access denied: insufficient permissions", 403);
     }
+    const trimmedProductSerialNo = String(productSerialNo ?? "").trim();
+    if (trimmedProductSerialNo) {
+        // A ticket can only be registered against a serial that actually exists in Manufactured
+        // Products. This mirrors the public customer-portal intake so internal registration cannot
+        // accept an arbitrary/unknown serial value.
+        const manufacturedUnit = await c.manufactured.findOne({ serialNumber: trimmedProductSerialNo });
+        if (!manufacturedUnit) {
+            return (0, http_1.fail)(res, "Serial number not found. Please enter a valid serial number registered in Manufactured Products.", 404);
+        }
+    }
     const productSerialNoKey = (0, complaintRules_1.normalizeComplaintSerialKey)(productSerialNo);
     if (productSerialNoKey) {
         const activeDuplicate = await c.complaints.findOne({
@@ -1396,7 +1406,14 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
     }
     const nextInspection = req.body.l1Inspection ?? existing.l1Inspection;
     const l1InspectionValid = isL1InspectionValid(nextInspection);
-    const isStartWorkRequest = req.body.status === "In Progress at Aurawatt" || (("serviceStartedAt" in req.body) && req.body.serviceStartedAt);
+    // A genuine "start work" request transitions a not-yet-started ticket into active work.
+    // Closing/updating flows legitimately re-send the ticket's existing serviceStartedAt, so the
+    // mere presence of serviceStartedAt in the body must NOT count as starting work — otherwise
+    // closing a Waiting Lobby / onsite ticket wrongly trips the queue-only guard below.
+    const isClosingRequest = (0, complaintRules_1.isClosedComplaintStatus)(req.body.status);
+    const isStartWorkRequest = !isClosingRequest &&
+        !existing.serviceStartedAt &&
+        (req.body.status === "In Progress at Aurawatt" || (("serviceStartedAt" in req.body) && Boolean(req.body.serviceStartedAt)));
     if (isStartWorkRequest && (existing.assignmentStatus === "Waiting" || existing.status === "Waiting Lobby" || existing.status === "Assigned for Onsite")) {
         return (0, http_1.fail)(res, "Waiting Lobby tickets are queue only. Work can only be started from Active Work tickets.", 400);
     }
