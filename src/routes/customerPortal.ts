@@ -2,7 +2,7 @@ import express, { type NextFunction, type Request, type Response, type Router } 
 import multer from "multer";
 
 import { getCollections } from "../db/collections";
-import type { Complaint, Customer, ManufacturedProduct, Notification, Sale } from "../types";
+import type { Complaint, Customer, ManufacturedProduct, Notification, Product, Sale } from "../types";
 import { uploadBufferToCloudinary } from "../utils/cloudinary";
 import { fail, ok } from "../utils/http";
 import { generateId } from "../utils/id";
@@ -256,13 +256,6 @@ router.post("/login", async (req: Request, res: Response) => {
     });
   }
 
-  const manufactured = await findManufacturedBySerial(serialNumber);
-  if (!manufactured) return fail(res, "Serial number not found", 404);
-  const invoiceDetails = await resolveInvoiceServiceDetails(serialNumber, manufactured);
-
-  const customer = manufactured.customerId
-    ? await c.customers.findOne({ id: manufactured.customerId }, { projection: { id: 1, name: 1, phone: 1, email: 1 } })
-    : null;
   const activeComplaint = await c.complaints.findOne(
     {
       productSerialNoKey: normalizeComplaintSerialKey(serialNumber),
@@ -270,6 +263,41 @@ router.post("/login", async (req: Request, res: Response) => {
     },
     { projection: { id: 1, status: 1 } }
   );
+  const activeComplaintPayload = activeComplaint
+    ? {
+        id: activeComplaint.id,
+        status: activeComplaint.status,
+        message: ACTIVE_COMPLAINT_DUPLICATE_MESSAGE,
+      }
+    : null;
+
+  const manufactured = await findManufacturedBySerial(serialNumber);
+  if (!manufactured) {
+    // The serial may exist in the serials master (imported / allocated inventory)
+    // without a linked manufactured or sold record yet. It is still a genuine
+    // Aurawatt serial, so accept it and let the customer proceed to raise a
+    // complaint instead of blocking them with "Serial number not found".
+    const serialEntry = await c.serials.findOne({ serialNumber });
+    if (!serialEntry) return fail(res, "Serial number not found", 404);
+    const seriesProduct = await c.products.findOne({ series: serialEntry.productSeriesId });
+    return ok(res, {
+      session: {
+        serialNumber: serialEntry.serialNumber,
+        productId: seriesProduct?.id ?? "",
+        productName: seriesProduct?.series ?? serialEntry.productSeriesId,
+        productModel: seriesProduct?.model,
+        soldDate: undefined,
+        customerId: undefined,
+      },
+      customer: null,
+      activeComplaint: activeComplaintPayload,
+    });
+  }
+  const invoiceDetails = await resolveInvoiceServiceDetails(serialNumber, manufactured);
+
+  const customer = manufactured.customerId
+    ? await c.customers.findOne({ id: manufactured.customerId }, { projection: { id: 1, name: 1, phone: 1, email: 1 } })
+    : null;
 
   return ok(res, {
     session: {
@@ -288,13 +316,7 @@ router.post("/login", async (req: Request, res: Response) => {
           email: customer.email,
         }
       : null,
-    activeComplaint: activeComplaint
-      ? {
-          id: activeComplaint.id,
-          status: activeComplaint.status,
-          message: ACTIVE_COMPLAINT_DUPLICATE_MESSAGE,
-        }
-      : null,
+    activeComplaint: activeComplaintPayload,
   });
 });
 
@@ -326,7 +348,14 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req: Request, 
   }
 
   const manufactured = serialNumber ? await findManufacturedBySerial(serialNumber) : null;
-  if (serialNumber && !manufactured) return fail(res, "Serial number not found", 404);
+  let serialSeriesProduct: Product | null = null;
+  if (serialNumber && !manufactured) {
+    // Accept serials present in the serials master but not yet linked to a
+    // manufactured / sold record (mirrors the /login fallback).
+    const serialEntry = await c.serials.findOne({ serialNumber });
+    if (!serialEntry) return fail(res, "Serial number not found", 404);
+    serialSeriesProduct = await c.products.findOne({ series: serialEntry.productSeriesId });
+  }
   const invoiceDetails = serialNumber && manufactured ? await resolveInvoiceServiceDetails(serialNumber, manufactured) : null;
   const activeDuplicate = serialNumber
     ? await c.complaints.findOne({
@@ -395,7 +424,7 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req: Request, 
     region: mapPortalRegion(`${state} ${district} ${siteLocation}`).name,
     priority: derivePriority(issueDescription),
     warrantyStatus: invoiceDetails?.warrantyStatus,
-    productModel: invoiceDetails?.productModel,
+    productModel: invoiceDetails?.productModel ?? serialSeriesProduct?.model,
     assignmentStatus: assignmentDecision?.assignmentStatus,
     assignedEngineerId: assignmentDecision?.assignedEngineerId,
     assignedEngineerName: assignmentDecision?.assignedEngineerName,
@@ -417,7 +446,7 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req: Request, 
   };
 
   await c.complaints.insertOne(complaint);
-  if (serialNumber) {
+  if (manufactured) {
     await c.manufactured.updateOne(
       { serialNumber },
       { $set: { customerPhones, updatedAt: now } }
