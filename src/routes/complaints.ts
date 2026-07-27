@@ -263,6 +263,23 @@ function isOnsiteTicket(complaint: Pick<Complaint, "siteVisitRequired" | "status
   return complaint.siteVisitRequired === true || complaint.status === "Assigned for Onsite";
 }
 
+/**
+ * The engineer the onsite visit was assigned to — matched on id first, then on a normalized name,
+ * so a differently cased or spaced name in the assignment record still resolves to the same person.
+ */
+function isAssignedOnsiteEngineer(complaint: Complaint, user: AuthUser) {
+  const sameName = (value: unknown) => {
+    const left = normalizeText(value).toLowerCase().replace(/\s+/g, " ");
+    const right = normalizeText(user.name).toLowerCase().replace(/\s+/g, " ");
+    return Boolean(left) && left === right;
+  };
+  return (
+    (Boolean(user.userId) && normalizeText(complaint.siteVisitEngineerId) === user.userId) ||
+    sameName(complaint.siteVisitEngineerName) ||
+    sameName(complaint.engineerName)
+  );
+}
+
 function sortForL1Queue(rows: Complaint[]) {
   return [...rows].sort((a, b) => (
     activeQueueRank(a.status) - activeQueueRank(b.status) ||
@@ -2097,8 +2114,16 @@ router.put(
     }
 
     if (returnOnsiteProgressToL2) {
-      if (!l1ActingOnOnsiteTicket) {
-        return fail(res, "Only the onsite L1 engineer can send onsite progress back to L2.", 403);
+      // The onsite visit is not always handed to an L1 account (L2/L3 engineers can be sent onsite
+      // too), so authorise the engineer the visit is actually assigned to — plus Admin, who works
+      // the queue on an engineer's behalf.
+      const canReturnOnsiteProgress = isOnsiteTicket(existing) && (
+        l1ActingOnOnsiteTicket ||
+        user.role === "Admin" ||
+        isAssignedOnsiteEngineer(existing, user)
+      );
+      if (!canReturnOnsiteProgress) {
+        return fail(res, "Only the assigned onsite engineer can send onsite progress back to L2.", 403);
       }
       const targetL2Id = normalizeText(existing.siteVisitRequestedById ?? existing.siteVisitAssignedById);
       const targetL2Name = normalizeText(existing.siteVisitRequestedByName ?? existing.siteVisitAssignedByName);
