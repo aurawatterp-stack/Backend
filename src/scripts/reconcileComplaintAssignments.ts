@@ -3,6 +3,7 @@ import { getCollections } from "../db/collections";
 import { getMongoClient } from "../db/mongo";
 import { rebuildTicketLoads, resolveAssignmentByStateDistrict } from "../services/engineerAssignments";
 import type { Complaint } from "../types";
+import { resolveComplaintRegionName } from "../utils/serviceRegions";
 
 function normalizeText(value: unknown) {
   return String(value ?? "").trim();
@@ -38,53 +39,64 @@ async function main() {
 
   let scanned = 0;
   let updated = 0;
+  let relabelled = 0;
   let missingMapping = 0;
 
   for (const complaint of complaints) {
     scanned += 1;
-    const level = normalizeServiceLevel(complaint);
-    if (level !== "L2") continue;
-
     const state = normalizeText(complaint.state);
     const district = normalizeText(complaint.district);
-    const mapping = await resolveAssignmentByStateDistrict(state, district);
-    const target = mapping?.l2Engineer;
-    if (!target) {
+    const level = normalizeServiceLevel(complaint);
+    const set: Record<string, unknown> = {};
+
+    // Region is only a label, and a wrong one is what makes a correctly routed ticket look like it
+    // went to an engineer from another region. Recompute it from the district/state the ticket is
+    // actually routed by, using the same rule the API applies to new tickets.
+    const region = resolveComplaintRegionName(complaint);
+    if (region !== normalizeText(complaint.region)) {
+      set.region = region;
+      relabelled += 1;
+      console.log(
+        `Relabelled ${complaint.id} (${complaint.productSerialNo || "no-serial"}) ${state} / ${district}: region ${normalizeText(complaint.region) || "none"} -> ${region}`
+      );
+    }
+
+    // Onsite tickets are deliberately parked with the onsite engineer — repointing them at the
+    // mapped L1/L2 would pull the ticket away from the visit that is in progress.
+    const mapping = level === "L3" || complaint.status === "Assigned for Onsite"
+      ? null
+      : await resolveAssignmentByStateDistrict(state, district);
+    const target = level === "L2" ? mapping?.l2Engineer : mapping?.l1Engineer;
+    if (mapping && !target) {
       missingMapping += 1;
-      continue;
     }
 
     const currentId = normalizeText(complaint.assignedEngineerId);
     const currentName = currentEngineName(complaint);
-    if (currentId === target.id && currentName.toLowerCase() === target.name.toLowerCase()) {
-      continue;
+    const alreadyCorrect = Boolean(target) && currentId === target!.id && currentName.toLowerCase() === target!.name.toLowerCase();
+    if (target && !alreadyCorrect) {
+      set.assignedEngineerId = target.id;
+      set.assignedEngineerName = target.name;
+      set.engineerName = target.name;
+      set.backupEngineerName = mapping?.backupEngineer?.name ?? complaint.backupEngineerName;
+      updated += 1;
+      console.log(
+        `Reassigned ${complaint.id} (${complaint.productSerialNo || "no-serial"}) ${state} / ${district}: ${currentName || currentId || "unassigned"} -> ${target.name} (${level})`
+      );
     }
 
-    await c.complaints.updateOne(
-      { id: complaint.id },
-      {
-        $set: {
-          assignedEngineerId: target.id,
-          assignedEngineerName: target.name,
-          engineerName: target.name,
-          backupEngineerName: mapping.backupEngineer?.name ?? complaint.backupEngineerName,
-          updatedAt: new Date(),
-        },
-      }
-    );
-
-    updated += 1;
-    console.log(
-      `Reassigned ${complaint.id} (${complaint.productSerialNo || "no-serial"}) ${state} / ${district}: ${currentName || currentId || "unassigned"} -> ${target.name}`
-    );
+    if (!Object.keys(set).length) continue;
+    set.updatedAt = new Date();
+    await c.complaints.updateOne({ id: complaint.id }, { $set: set });
   }
 
   await rebuildTicketLoads();
   const client = await getMongoClient();
   await client.close();
   console.log(`Scanned ${scanned} consumer complaints.`);
-  console.log(`Updated ${updated} complaint(s).`);
-  console.log(`Missing mapping for ${missingMapping} complaint(s).`);
+  console.log(`Reassigned ${updated} complaint(s) to their mapped engineer.`);
+  console.log(`Relabelled the region on ${relabelled} complaint(s).`);
+  console.log(`Missing mapping for ${missingMapping} complaint(s) — configure these in Engineer Assignment Management.`);
 }
 
 main().catch((err) => {

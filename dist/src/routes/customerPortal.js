@@ -12,15 +12,10 @@ const id_1 = require("../utils/id");
 const ticketNumber_1 = require("../utils/ticketNumber");
 const ticketRouting_1 = require("../services/ticketRouting");
 const complaintRules_1 = require("../utils/complaintRules");
+const serviceRegions_1 = require("../utils/serviceRegions");
 const validation_1 = require("../utils/validation");
 const router = express_1.default.Router();
 const STANDARD_WARRANTY_MONTHS = 60;
-const PORTAL_SERVICE_REGIONS = [
-    { name: "NCR", keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"], engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush", backupEngineerName: "Prashant Noida" },
-    { name: "UP", keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"], engineerEmail: "l1.neeraj@avavbusiness.com", engineerName: "Neeraj", backupEngineerName: "Naveen Maurya" },
-    { name: "Rajasthan", keywords: ["jaipur", "ajmer", "rajasthan", "udaipur", "jodhpur"], engineerEmail: "l1.prashant.singh@avavbusiness.com", engineerName: "Prashant Singh", backupEngineerName: "Pradeep" },
-    { name: "Punjab", keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"], engineerEmail: "l1.nitin@avavbusiness.com", engineerName: "Nitin", backupEngineerName: "Swastik" },
-];
 const PORTAL_DISTRICT_L1_ENGINEER_MAPPING = [
     { state: "Uttar Pradesh", district: "Ghaziabad", engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush" },
     { state: "Uttar Pradesh", district: "Noida", engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush" },
@@ -111,9 +106,14 @@ function derivePriority(issueDescription) {
         return "Medium";
     return "Low";
 }
-function mapPortalRegion(location) {
-    const text = String(location ?? "").trim().toLowerCase();
-    return PORTAL_SERVICE_REGIONS.find((region) => region.name.toLowerCase() === text || region.keywords.some((keyword) => text.includes(keyword))) ?? PORTAL_SERVICE_REGIONS[0];
+/**
+ * Region label for a portal ticket, using the shared service-region rule. A location that matches
+ * no configured region keeps the ticket's own state name rather than falling back to the first
+ * region in the list — that fallback stamped "NCR" on tickets from anywhere, while routing (which
+ * goes by the state/district engineer mapping) sent them to the engineer covering the district.
+ */
+function resolvePortalRegionName(location, stateFallback) {
+    return (0, serviceRegions_1.resolveRegionName)([location], stateFallback);
 }
 function normalizeForLookup(value) {
     return ` ${String(value ?? "").trim().toLowerCase()} `;
@@ -192,7 +192,7 @@ async function resolveInvoiceServiceDetails(serialNumber, manufactured) {
         productModel: product?.model ?? manufactured.productId,
         state,
         district,
-        region: mapPortalRegion(regionSource).name,
+        region: resolvePortalRegionName(regionSource, state),
         warrantyStatus,
         customer,
         sale,
@@ -383,7 +383,7 @@ router.post("/complaints", runCustomerPortalPictureUpload, async (req, res) => {
         siteLocation: siteLocation || undefined,
         state,
         district,
-        region: mapPortalRegion(`${state} ${district} ${siteLocation}`).name,
+        region: resolvePortalRegionName(`${state} ${district} ${siteLocation}`, state),
         priority: derivePriority(issueDescription),
         warrantyStatus: invoiceDetails?.warrantyStatus,
         productModel: invoiceDetails?.productModel ?? serialSeriesProduct?.model,

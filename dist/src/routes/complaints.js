@@ -15,6 +15,7 @@ const ticketNumber_1 = require("../utils/ticketNumber");
 const engineerAssignments_1 = require("../services/engineerAssignments");
 const ticketRouting_1 = require("../services/ticketRouting");
 const complaintRules_1 = require("../utils/complaintRules");
+const serviceRegions_1 = require("../utils/serviceRegions");
 const validation_1 = require("../utils/validation");
 const router = express_1.default.Router();
 const MAX_INVERTER_PICTURE_BYTES = 5 * 1024 * 1024;
@@ -40,40 +41,8 @@ function runInverterPictureUpload(req, res, next) {
         return next(err);
     });
 }
-const SERVICE_REGIONS = [
-    {
-        name: "NCR",
-        keywords: ["delhi", "noida", "gurgaon", "gurugram", "faridabad", "ghaziabad"],
-        engineers: [
-            { id: "eng-ncr-l1", name: "Piyush" },
-            { id: "eng-ncr-l1b", name: "Prashant Noida" },
-        ],
-    },
-    {
-        name: "UP",
-        keywords: ["lucknow", "kanpur", "uttar pradesh", "varanasi", "prayagraj"],
-        engineers: [
-            { id: "eng-up-l1", name: "Neeraj" },
-            { id: "eng-up-l1b", name: "Naveen Maurya" },
-        ],
-    },
-    {
-        name: "Rajasthan",
-        keywords: ["jaipur", "ajmer", "rajasthan", "udaipur", "jodhpur"],
-        engineers: [
-            { id: "eng-rj-l1", name: "Prashant Singh" },
-            { id: "eng-rj-l1b", name: "Pradeep" },
-        ],
-    },
-    {
-        name: "Punjab",
-        keywords: ["ludhiana", "amritsar", "punjab", "jalandhar", "patiala"],
-        engineers: [
-            { id: "eng-pb-l1", name: "Nitin" },
-            { id: "eng-pb-l1b", name: "Swastik" },
-        ],
-    },
-];
+// Region labels and the rule that derives them live in utils/serviceRegions so the repair script
+// (npm run repair:complaint-assignments) relabels existing tickets by exactly the same rule.
 const DISTRICT_L1_ENGINEER_MAPPING = [
     { state: "Uttar Pradesh", district: "Ghaziabad", engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush" },
     { state: "Uttar Pradesh", district: "Noida", engineerEmail: "l1.piyush@avavbusiness.com", engineerName: "Piyush" },
@@ -181,10 +150,6 @@ function mappedL1EngineerForDistrict(state, district) {
     return DISTRICT_L1_ENGINEER_MAPPING.find((mapping) => (normalizeLookup(mapping.state) === normalizedState &&
         normalizeLookup(mapping.district) === normalizedDistrict));
 }
-function mapRegion(input) {
-    const text = normalizeText(input).toLowerCase();
-    return SERVICE_REGIONS.find((region) => region.name.toLowerCase() === text || region.keywords.some((keyword) => text.includes(keyword))) ?? SERVICE_REGIONS[0];
-}
 function priorityRank(priority) {
     if (priority === "Emergency")
         return 0;
@@ -235,6 +200,20 @@ function isL1ServiceRole(role) {
 }
 function isOnsiteTicket(complaint) {
     return complaint.siteVisitRequired === true || complaint.status === "Assigned for Onsite";
+}
+/**
+ * The engineer the onsite visit was assigned to — matched on id first, then on a normalized name,
+ * so a differently cased or spaced name in the assignment record still resolves to the same person.
+ */
+function isAssignedOnsiteEngineer(complaint, user) {
+    const sameName = (value) => {
+        const left = normalizeText(value).toLowerCase().replace(/\s+/g, " ");
+        const right = normalizeText(user.name).toLowerCase().replace(/\s+/g, " ");
+        return Boolean(left) && left === right;
+    };
+    return ((Boolean(user.userId) && normalizeText(complaint.siteVisitEngineerId) === user.userId) ||
+        sameName(complaint.siteVisitEngineerName) ||
+        sameName(complaint.engineerName));
 }
 function sortForL1Queue(rows) {
     return [...rows].sort((a, b) => (activeQueueRank(a.status) - activeQueueRank(b.status) ||
@@ -385,7 +364,11 @@ async function serviceEngineers(level) {
     return users.map((user) => ({ id: user.id, name: user.name, email: user.email ?? "", role: user.role }));
 }
 async function buildServiceAssignment(input) {
-    const regionConfig = input.region ? mapRegion(input.region) : mapRegion(input.siteLocation);
+    // District first, then state: the region label must describe the location the ticket is actually
+    // routed by (state + district drive the engineer mapping), not the intake form's region dropdown,
+    // which defaults to a value the operator often never touches.
+    const regionName = (0, serviceRegions_1.resolveRegionName)([input.district, input.state, input.region, input.siteLocation], input.state);
+    const locationLabel = [normalizeText(input.district), normalizeText(input.state)].filter(Boolean).join(", ") || regionName;
     const priority = derivePriority(input.issueDescription, input.priority);
     const now = new Date();
     const engineers = await serviceEngineers(input.level);
@@ -452,17 +435,46 @@ async function buildServiceAssignment(input) {
         }
         return null;
     }
-    let engineer = preferredEngineer ?? mappedPrimary ?? [...engineerStats].sort((a, b) => (a.activeCount - b.activeCount ||
+    /**
+     * A ticket belongs to the engineer mapped to its state/district — never to whoever happens to be
+     * the least busy. Only L3 is a shared team inbox (there is no district-level L3 mapping), so the
+     * load-balanced pick stays available for L3 and for an explicit force-assign; L1/L2 must come
+     * from the mapping. Falling back to the least-loaded engineer for L1 is what put NCR tickets on
+     * an engineer who covers other districts entirely.
+     */
+    const leastLoadedEngineer = [...engineerStats].sort((a, b) => (a.activeCount - b.activeCount ||
         a.waitingCount - b.waitingCount ||
         a.name.localeCompare(b.name)))[0];
+    const engineer = preferredEngineer ?? mappedPrimary ?? (input.level === "L3" ? leastLoadedEngineer : undefined);
     if (!engineer) {
+        if (input.level === "L1") {
+            // Leave the ticket unassigned for Admin triage instead of routing it out of region. The
+            // ticket is still registered — Admin can assign it by hand, or add the missing mapping in
+            // Engineer Assignment Management and reassign from there.
+            return {
+                region: regionName,
+                priority,
+                escalationLevel: input.level,
+                status: "Open at Aurawatt",
+                unassignedReason: districtPrimary
+                    ? `Mapped L1 engineer ${districtPrimary.name} is not an active service engineer, so ${locationLabel} has no engineer to receive this ticket.`
+                    : `No L1 engineer mapping is configured for ${locationLabel}.`,
+            };
+        }
+        if (input.level === "L2") {
+            return {
+                blockedMessage: districtPrimary
+                    ? `Mapped L2 engineer ${districtPrimary.name} is not an active service engineer for ${locationLabel}. Please verify the engineer mapping before escalating.`
+                    : `No L2 mapping found for ${locationLabel}. Please verify the complaint location before escalating.`,
+            };
+        }
         return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
     }
     if (mappedPrimary && !preferredEngineer && input.level === "L1") {
         const primaryAssignment = assignmentForEngineer(engineer);
         if (primaryAssignment) {
             return {
-                region: regionConfig.name,
+                region: regionName,
                 priority,
                 escalationLevel: input.level,
                 backupEngineerName: mappedBackup?.name ?? districtBackup?.name,
@@ -470,9 +482,17 @@ async function buildServiceAssignment(input) {
                 ...primaryAssignment,
             };
         }
-        const backupEngineer = mappedBackup ?? [...engineerStats].find((candidate) => candidate.id !== engineer.id);
+        // Overflow goes to the backup engineer configured for this district — not to an arbitrary
+        // engineer, which would hand the ticket to someone who does not cover the area.
+        const backupEngineer = mappedBackup;
         if (!backupEngineer) {
-            return { blockedMessage: complaintRules_1.ENGINEER_CAPACITY_MESSAGE };
+            return {
+                region: regionName,
+                priority,
+                escalationLevel: input.level,
+                status: "Open at Aurawatt",
+                unassignedReason: `Mapped L1 engineer ${engineer.name} is at full capacity for ${locationLabel} and no backup engineer is mapped for this district.`,
+            };
         }
         // Backup tickets don't split into active/waiting like primary work does, and have no
         // capacity cap — they all land in the backup engineer's dedicated "L1 Backup" queue
@@ -480,7 +500,7 @@ async function buildServiceAssignment(input) {
         // Active Work / Waiting Lobby load.
         const backupCount = await backupTicketCount(backupEngineer.id, backupEngineer.name, input.excludeComplaintId);
         return {
-            region: regionConfig.name,
+            region: regionName,
             priority,
             escalationLevel: input.level,
             backupEngineerName: backupEngineer.name,
@@ -502,10 +522,10 @@ async function buildServiceAssignment(input) {
     if (mappedPrimary && !preferredEngineer && input.level === "L2") {
         const primaryAssignment = assignmentForEngineer(mappedPrimary);
         if (!primaryAssignment) {
-            return { blockedMessage: `Mapped L2 engineer ${districtPrimary?.name || "unknown"} is unavailable for ${regionConfig.name}. Please verify the complaint location or engineer mapping.` };
+            return { blockedMessage: `Mapped L2 engineer ${districtPrimary?.name || "unknown"} is unavailable for ${locationLabel}. Please verify the complaint location or engineer mapping.` };
         }
         return {
-            region: regionConfig.name,
+            region: regionName,
             priority,
             escalationLevel: input.level,
             backupEngineerName: mappedBackup?.name ?? districtBackup?.name,
@@ -515,13 +535,13 @@ async function buildServiceAssignment(input) {
     }
     if (!preferredEngineer && input.level === "L2") {
         return {
-            blockedMessage: `No L2 mapping found for ${regionConfig.name}. Please verify the complaint location before escalating.`,
+            blockedMessage: `No L2 mapping found for ${locationLabel}. Please verify the complaint location before escalating.`,
         };
     }
     const genericAssignment = assignmentForEngineer(engineer);
     if (genericAssignment) {
         return {
-            region: regionConfig.name,
+            region: regionName,
             priority,
             escalationLevel: input.level,
             backupEngineerName: mappedBackup?.name ?? districtBackup?.name ?? engineerStats.find((candidate) => candidate.id !== engineer.id)?.name,
@@ -777,6 +797,12 @@ async function complaintRoleScope(user) {
                 ...(user.name ? [{ siteVisitRequired: true, siteVisitEngineerName: user.name }] : []),
                 { status: "Assigned for Onsite", siteVisitEngineerId: user.userId },
                 ...(user.name ? [{ status: "Assigned for Onsite", siteVisitEngineerName: user.name }] : []),
+                // Tickets this L2 sent out for an onsite visit. Without these clauses a dispatched ticket
+                // could drop out of the sender's queue the moment it moved to the onsite engineer, leaving
+                // nobody able to act on it until the engineer sent it back.
+                { siteVisitAssignedById: user.userId },
+                { siteVisitRequestedById: user.userId },
+                ...(user.name ? [{ siteVisitAssignedByName: user.name }, { siteVisitRequestedByName: user.name }] : []),
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
                 ...(teamNames.length ? [{ type: "Consumer", assignedEngineerName: { $in: teamNames } }] : []),
             ],
@@ -821,6 +847,10 @@ async function canAccessComplaint(user, complaint) {
             (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
             (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
             (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
+            // The L2 who sent the ticket out for an onsite visit keeps access to it while it is away.
+            complaint.siteVisitAssignedById === user.userId ||
+            complaint.siteVisitRequestedById === user.userId ||
+            (Boolean(user.name) && (complaint.siteVisitAssignedByName === user.name || complaint.siteVisitRequestedByName === user.name)) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2"));
         if (ownMatch)
             return true;
@@ -1027,7 +1057,9 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
         siteLocation,
         state: complaintState ? String(complaintState) : undefined,
         district: complaintDistrict ? String(complaintDistrict) : undefined,
-        region,
+        // The region resolved from the ticket's own state/district wins over a stale form value, so
+        // the label always describes where the ticket actually is and who it was routed to.
+        region: assignmentDecision?.region ?? region,
         priority: derivePriority(issueDescription, priority),
         warrantyStatus,
         productModel,
@@ -1119,7 +1151,9 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("complain
                 action: "Complaint raised",
                 toStatus: assignment?.status ?? "Open at Aurawatt",
                 user,
-                note: "Complaint created through service intake.",
+                note: assignment?.unassignedReason
+                    ? `Complaint created through service intake. Left unassigned for Admin triage: ${assignment.unassignedReason}`
+                    : "Complaint created through service intake.",
             })],
     };
     await c.complaints.insertOne(complaint);
@@ -1719,7 +1753,13 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         if (assignment.blockedMessage) {
             return (0, http_1.fail)(res, assignment.blockedMessage, 400);
         }
-        Object.assign(update, assignment);
+        // An explicit (re)assignment must name an engineer who can actually take the ticket —
+        // report the reason instead of quietly leaving the ticket unassigned.
+        if (assignment.unassignedReason) {
+            return (0, http_1.fail)(res, assignment.unassignedReason, 400);
+        }
+        const { unassignedReason: _unassignedReason, ...assignmentFields } = assignment;
+        Object.assign(update, assignmentFields);
     }
     const requestedAssignToId = normalizeText(req.body.assignToEngineerId);
     const requestedAssignToRole = normalizeText(req.body.assignToRole);
@@ -1763,7 +1803,11 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         if (assignment.blockedMessage) {
             return (0, http_1.fail)(res, assignment.blockedMessage, 400);
         }
-        Object.assign(update, assignment);
+        if (assignment.unassignedReason) {
+            return (0, http_1.fail)(res, assignment.unassignedReason, 400);
+        }
+        const { unassignedReason: _unassignedReason, ...assignmentFields } = assignment;
+        Object.assign(update, assignmentFields);
         if (assignment.assignmentStatus === "Waiting") {
             if (level === "L2" && !req.body.status) {
                 update.status = "Waiting Lobby";
@@ -1804,12 +1848,22 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
             if (assignment.blockedMessage) {
                 return (0, http_1.fail)(res, assignment.blockedMessage, 400);
             }
-            Object.assign(update, assignment);
+            if (assignment.unassignedReason) {
+                return (0, http_1.fail)(res, assignment.unassignedReason, 400);
+            }
+            const { unassignedReason: _unassignedReason, ...assignmentFields } = assignment;
+            Object.assign(update, assignmentFields);
         }
     }
     if (returnOnsiteProgressToL2) {
-        if (!l1ActingOnOnsiteTicket) {
-            return (0, http_1.fail)(res, "Only the onsite L1 engineer can send onsite progress back to L2.", 403);
+        // The onsite visit is not always handed to an L1 account (L2/L3 engineers can be sent onsite
+        // too), so authorise the engineer the visit is actually assigned to — plus Admin, who works
+        // the queue on an engineer's behalf.
+        const canReturnOnsiteProgress = isOnsiteTicket(existing) && (l1ActingOnOnsiteTicket ||
+            user.role === "Admin" ||
+            isAssignedOnsiteEngineer(existing, user));
+        if (!canReturnOnsiteProgress) {
+            return (0, http_1.fail)(res, "Only the assigned onsite engineer can send onsite progress back to L2.", 403);
         }
         const targetL2Id = normalizeText(existing.siteVisitRequestedById ?? existing.siteVisitAssignedById);
         const targetL2Name = normalizeText(existing.siteVisitRequestedByName ?? existing.siteVisitAssignedByName);
