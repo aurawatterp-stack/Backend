@@ -202,6 +202,47 @@ function isOnsiteTicket(complaint) {
     return complaint.siteVisitRequired === true || complaint.status === "Assigned for Onsite";
 }
 /**
+ * Resolves who a finished onsite visit must be handed back to.
+ *
+ * Normally that is the recorded requester (or assigner) of the visit. Tickets dispatched before the
+ * dispatch-ownership fix can have those fields overwritten with the onsite engineer themself, and
+ * returning such a ticket to its "requester" would park it back on the engineer who just finished
+ * the visit — invisible to every L2 queue and impossible for the engineer to close. So a candidate
+ * that is the onsite side of the ticket is skipped in favour of the last non-L1 user who actually
+ * dispatched the visit according to the ticket's own workflow history.
+ */
+function resolveOnsiteReturnTarget(complaint, actor) {
+    const onsiteSideNames = new Set([complaint.siteVisitEngineerName, complaint.engineerName, actor.name]
+        .map(normalizeLookup)
+        .filter(Boolean));
+    const isOnsiteSide = (id, name) => ((Boolean(id) && id === actor.userId) || onsiteSideNames.has(normalizeLookup(name)));
+    const candidates = [
+        { id: complaint.siteVisitRequestedById, name: complaint.siteVisitRequestedByName, role: complaint.siteVisitRequestedByRole },
+        { id: complaint.siteVisitAssignedById, name: complaint.siteVisitAssignedByName, role: complaint.siteVisitAssignedByRole },
+    ];
+    // Newest dispatch first — an L2 who re-assigned the visit owns it over the original requester.
+    for (const event of [...(complaint.workflowHistory ?? [])].reverse()) {
+        if (event.action !== "Assigned for onsite" || isL1ServiceRole(event.byRole))
+            continue;
+        candidates.push({ id: event.by, name: event.byName, role: event.byRole });
+    }
+    for (const candidate of candidates) {
+        const id = normalizeText(candidate.id);
+        const name = normalizeText(candidate.name);
+        if (!id && !name)
+            continue;
+        if (isOnsiteSide(id, name))
+            continue;
+        return { id, name, role: normalizeText(candidate.role) || undefined };
+    }
+    // Nothing distinct from the onsite engineer: keep whatever the ticket recorded, which is correct
+    // when an L2/L3 sent the visit to themselves.
+    const fallbackId = normalizeText(complaint.siteVisitRequestedById ?? complaint.siteVisitAssignedById);
+    const fallbackName = normalizeText(complaint.siteVisitRequestedByName ?? complaint.siteVisitAssignedByName);
+    const fallbackRole = normalizeText(complaint.siteVisitRequestedByRole ?? complaint.siteVisitAssignedByRole) || undefined;
+    return fallbackId || fallbackName ? { id: fallbackId, name: fallbackName, role: fallbackRole } : null;
+}
+/**
  * The engineer the onsite visit was assigned to — matched on id first, then on a normalized name,
  * so a differently cased or spaced name in the assignment record still resolves to the same person.
  */
@@ -803,6 +844,10 @@ async function complaintRoleScope(user) {
                 { siteVisitAssignedById: user.userId },
                 { siteVisitRequestedById: user.userId },
                 ...(user.name ? [{ siteVisitAssignedByName: user.name }, { siteVisitRequestedByName: user.name }] : []),
+                // The ticket's own history is the last word on who dispatched the visit: tickets stamped
+                // before the dispatch-ownership fix have the fields above overwritten with the onsite
+                // engineer, and this clause is what keeps them reachable by the L2 who actually sent them.
+                { workflowHistory: { $elemMatch: { action: "Assigned for onsite", by: user.userId } } },
                 { assignmentStatus: "Waiting", status: "Waiting Lobby", escalationLevel: "L2" },
                 ...(teamNames.length ? [{ type: "Consumer", assignedEngineerName: { $in: teamNames } }] : []),
             ],
@@ -847,10 +892,12 @@ async function canAccessComplaint(user, complaint) {
             (complaint.siteVisitRequired === true && complaint.siteVisitEngineerId === user.userId) ||
             (complaint.siteVisitRequired === true && Boolean(user.name) && complaint.siteVisitEngineerName === user.name) ||
             (complaint.status === "Assigned for Onsite" && (complaint.siteVisitEngineerId === user.userId || (Boolean(user.name) && complaint.siteVisitEngineerName === user.name))) ||
-            // The L2 who sent the ticket out for an onsite visit keeps access to it while it is away.
+            // The L2 who sent the ticket out for an onsite visit keeps access to it while it is away —
+            // by the recorded dispatcher, or by the ticket's history when that record was overwritten.
             complaint.siteVisitAssignedById === user.userId ||
             complaint.siteVisitRequestedById === user.userId ||
             (Boolean(user.name) && (complaint.siteVisitAssignedByName === user.name || complaint.siteVisitRequestedByName === user.name)) ||
+            (complaint.workflowHistory ?? []).some((event) => event.action === "Assigned for onsite" && event.by === user.userId) ||
             (complaint.assignmentStatus === "Waiting" && complaint.status === "Waiting Lobby" && complaint.escalationLevel === "L2"));
         if (ownMatch)
             return true;
@@ -1681,6 +1728,23 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         if (field in req.body)
             update[field] = req.body[field];
     }
+    // Who dispatched an onsite visit decides who the visit is reported back to, so the onsite side
+    // of a ticket may never write those fields — whatever its form happens to submit. Without this,
+    // an onsite engineer's save could make itself the dispatcher and the ticket would be handed
+    // back to the engineer instead of the L2 who sent it.
+    if (l1ActingOnOnsiteTicket) {
+        for (const ownershipField of [
+            "siteVisitRequestedById",
+            "siteVisitRequestedByName",
+            "siteVisitRequestedByRole",
+            "siteVisitRequestedAt",
+            "siteVisitAssignedById",
+            "siteVisitAssignedByName",
+            "siteVisitAssignedByRole",
+        ]) {
+            delete update[ownershipField];
+        }
+    }
     if ("spareParts" in req.body) {
         update.spareParts = normalizeSpareRequestParts(req.body.spareParts);
     }
@@ -1865,8 +1929,9 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         if (!canReturnOnsiteProgress) {
             return (0, http_1.fail)(res, "Only the assigned onsite engineer can send onsite progress back to L2.", 403);
         }
-        const targetL2Id = normalizeText(existing.siteVisitRequestedById ?? existing.siteVisitAssignedById);
-        const targetL2Name = normalizeText(existing.siteVisitRequestedByName ?? existing.siteVisitAssignedByName);
+        const returnTarget = resolveOnsiteReturnTarget(existing, user);
+        const targetL2Id = normalizeText(returnTarget?.id);
+        const targetL2Name = normalizeText(returnTarget?.name);
         if (!targetL2Id && !targetL2Name) {
             return (0, http_1.fail)(res, "Original L2 requester not found for this onsite ticket.", 400);
         }
@@ -1883,6 +1948,13 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         update.escalatedByName = user.name || user.email;
         update.escalatedByRole = user.role;
         update.escalatedAt = serverNow;
+        // Heal the dispatch record when it had been overwritten with the onsite engineer, so the
+        // ticket also reappears in that L2's "Sent for Onsite by Me" list, not just their queue.
+        if (normalizeText(existing.siteVisitRequestedById) !== targetL2Id || normalizeText(existing.siteVisitRequestedByName) !== targetL2Name) {
+            update.siteVisitRequestedById = targetL2Id || undefined;
+            update.siteVisitRequestedByName = targetL2Name || undefined;
+            update.siteVisitRequestedByRole = returnTarget?.role ?? existing.siteVisitRequestedByRole;
+        }
         update.siteVisitCompletedAt = existing.siteVisitCompletedAt ?? serverNow;
         update.slaStartedAt = existing.slaStartedAt ?? serverNow;
         update.slaDueAt = existing.slaDueAt ?? new Date(serverNow.getTime() + slaHoursForLevel("L2") * 60 * 60 * 1000);
@@ -1917,7 +1989,19 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         }
     }
     const desiredStatus = String(req.body.status ?? update.status ?? existing.status);
-    const wantsOnsiteAssignment = Boolean(req.body.sendForOnsite) || desiredStatus === "Assigned for Onsite";
+    /**
+     * Only an explicit request may (re)dispatch an onsite visit.
+     *
+     * This deliberately does NOT look at `desiredStatus`: that falls back to `existing.status`, so
+     * for a ticket already sitting in "Assigned for Onsite" every unrelated save — the onsite
+     * engineer updating their own inspection form, an admin editing a field — re-entered the
+     * dispatch block below and re-stamped `siteVisitRequestedBy*` / `siteVisitAssignedBy*` with
+     * whoever made that call. The ticket then no longer knew which L2 had sent it out, so
+     * "Updates done, progress sent to L2" handed it back to the onsite engineer themself and it
+     * disappeared from the L2 queue. It also wiped the requested spare parts and reset the
+     * requested-at timestamp on every save.
+     */
+    const wantsOnsiteAssignment = Boolean(req.body.sendForOnsite) || String(req.body.status ?? "") === "Assigned for Onsite";
     const wantsL3ReplacementReview = Boolean(req.body.escalateReplacementToL3) || desiredStatus === "Pending L3 Approval";
     const wantsDispatchApproval = Boolean(req.body.sendReplacementRequest) || desiredStatus === "Awaiting Dispatch" || desiredStatus === "Replacement Requested";
     if (wantsOnsiteAssignment) {
@@ -1930,8 +2014,10 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         if (onsiteCounts.activeCount >= complaintRules_1.MAX_ACTIVE_SERVICE_TICKETS) {
             return (0, http_1.fail)(res, complaintRules_1.ONSITE_CAPACITY_MESSAGE, 400);
         }
-        const sparePartsInput = Array.isArray(req.body.siteVisitSpareParts) ? req.body.siteVisitSpareParts : [];
-        const onsiteSpareParts = sparePartsInput
+        // Only replace the requested spare parts when the caller actually sent the field — a
+        // re-dispatch that says nothing about spares must not silently clear them.
+        const sparePartsInput = Array.isArray(req.body.siteVisitSpareParts) ? req.body.siteVisitSpareParts : null;
+        const onsiteSpareParts = (sparePartsInput ?? [])
             .map((part, index) => {
             const name = normalizeText(part?.name ?? part?.sparePartName ?? part?.partName);
             const quantity = Number(part?.quantity);
@@ -1948,12 +2034,27 @@ router.put("/:id/service", auth_1.authenticate, (0, auth_1.requireAnyPermission)
         update.siteVisitRequired = true;
         update.siteVisitEngineerId = onsiteEngineerId || undefined;
         update.siteVisitEngineerName = onsiteEngineerName || undefined;
-        update.siteVisitRequestedById = req.body.siteVisitRequestedById ?? user.userId;
-        update.siteVisitRequestedByName = req.body.siteVisitRequestedByName ?? user.name ?? user.email;
-        update.siteVisitRequestedByRole = req.body.siteVisitRequestedByRole ?? user.role;
-        update.siteVisitRequestedAt = req.body.siteVisitRequestedAt ? new Date(req.body.siteVisitRequestedAt) : serverNow;
+        // The dispatcher is whoever is logged in and sending the ticket out — recorded from the
+        // authenticated session, never from the request body, and taken from the ticket's own
+        // history once it exists so a re-dispatch (for example handing the visit to a different
+        // engineer) still returns the ticket to the L2 who first raised the visit.
+        const alreadyDispatched = Boolean(normalizeText(existing.siteVisitRequestedById) || normalizeText(existing.siteVisitRequestedByName));
+        if (alreadyDispatched) {
+            update.siteVisitRequestedById = existing.siteVisitRequestedById;
+            update.siteVisitRequestedByName = existing.siteVisitRequestedByName;
+            update.siteVisitRequestedByRole = existing.siteVisitRequestedByRole;
+            update.siteVisitRequestedAt = existing.siteVisitRequestedAt ?? serverNow;
+        }
+        else {
+            update.siteVisitRequestedById = user.userId;
+            update.siteVisitRequestedByName = user.name ?? user.email;
+            update.siteVisitRequestedByRole = user.role;
+            update.siteVisitRequestedAt = req.body.siteVisitRequestedAt ? new Date(req.body.siteVisitRequestedAt) : serverNow;
+        }
         update.siteVisitRemarks = normalizeText(req.body.siteVisitRemarks ?? update.siteVisitRemarks ?? existing.siteVisitRemarks) || undefined;
-        update.siteVisitSpareParts = onsiteSpareParts;
+        if (sparePartsInput) {
+            update.siteVisitSpareParts = onsiteSpareParts;
+        }
         update.siteVisitAssignedById = user.userId;
         update.siteVisitAssignedByName = user.name ?? user.email;
         update.siteVisitAssignedByRole = user.role;

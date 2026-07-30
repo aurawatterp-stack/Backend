@@ -9,6 +9,7 @@
     "seed:price-entries": "ts-node --transpile-only src/scripts/seedPriceEntries.ts",
     "import:sales": "ts-node --transpile-only src/scripts/import_sales_and_deduct.ts",
     "repair:complaint-assignments": "ts-node --transpile-only src/scripts/reconcileComplaintAssignments.ts",
+    "repair:onsite-ownership": "ts-node --transpile-only src/scripts/repairOnsiteDispatchOwnership.ts",
     "start:prod": "node dist/backend.js"
   },
   "dependencies": {
