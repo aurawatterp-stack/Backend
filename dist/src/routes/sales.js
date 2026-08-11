@@ -539,7 +539,7 @@ router.post("/upload-pi", auth_1.authenticate, (0, auth_1.requireAnyPermission)(
 router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission)("accounts:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const { id } = req.params;
-    const { taxInvoiceAttachmentName, taxInvoiceAttachmentUrl, ewayBillAttachmentName, ewayBillAttachmentUrl, paymentStatus, } = req.body;
+    const { taxInvoiceNo, taxInvoiceAttachmentName, taxInvoiceAttachmentUrl, ewayBillAttachmentName, ewayBillAttachmentUrl, paymentStatus, } = req.body;
     const sale = await c.sales.findOne({ id });
     if (!sale)
         return (0, http_1.fail)(res, "PI record not found", 404);
@@ -547,7 +547,8 @@ router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission
         return (0, http_1.fail)(res, "PI must be generated before payment verification");
     const user = req.user;
     const update = {};
-    const hasDocumentUpload = taxInvoiceAttachmentName !== undefined ||
+    const hasDocumentUpload = taxInvoiceNo !== undefined ||
+        taxInvoiceAttachmentName !== undefined ||
         taxInvoiceAttachmentUrl !== undefined ||
         ewayBillAttachmentName !== undefined ||
         ewayBillAttachmentUrl !== undefined;
@@ -573,6 +574,8 @@ router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission
             return (0, http_1.fail)(res, "Use Mark as Payment Verified, or upload Tax Invoice and E-Way Bill after vehicle no. is shared");
         }
     }
+    if (taxInvoiceNo !== undefined)
+        update.taxInvoiceNo = String(taxInvoiceNo).trim();
     if (taxInvoiceAttachmentName !== undefined)
         update.taxInvoiceAttachmentName = String(taxInvoiceAttachmentName);
     if (taxInvoiceAttachmentUrl !== undefined)
@@ -583,6 +586,14 @@ router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission
         update.ewayBillAttachmentUrl = String(ewayBillAttachmentUrl);
     if (paymentStatus !== undefined)
         update.paymentStatus = paymentStatus === "Confirmed" ? "Confirmed" : "Pending";
+    if (update.taxInvoiceNo) {
+        const duplicate = await c.sales.findOne({ taxInvoiceNo: update.taxInvoiceNo, id: { $ne: String(id) } });
+        if (duplicate)
+            return (0, http_1.fail)(res, `Tax Invoice No. ${update.taxInvoiceNo} is already used on PI ${duplicate.referenceNo}`);
+    }
+    if (hasDocumentUpload && !(update.taxInvoiceNo || sale.taxInvoiceNo)) {
+        return (0, http_1.fail)(res, "Tax Invoice No. is required before accounts documents can be shared");
+    }
     if ((taxInvoiceAttachmentName !== undefined || taxInvoiceAttachmentUrl !== undefined || ewayBillAttachmentName !== undefined || ewayBillAttachmentUrl !== undefined) &&
         ((!update.taxInvoiceAttachmentName && !sale.taxInvoiceAttachmentName) ||
             (!update.ewayBillAttachmentName && !sale.ewayBillAttachmentName))) {

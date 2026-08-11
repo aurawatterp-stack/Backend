@@ -424,6 +424,8 @@ export type Sale = {
   courierDocketNo?: string;
   courierDocketAttachmentName?: string;
   courierDocketAttachmentUrl?: string;
+  /** Tax Invoice (TI) number entered by Accounts; the PI number stays in referenceNo. */
+  taxInvoiceNo?: string;
   taxInvoiceAttachmentName?: string;
   taxInvoiceAttachmentUrl?: string;
   ewayBillAttachmentName?: string;

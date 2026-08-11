@@ -634,6 +634,7 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
   const c = await getCollections();
   const { id } = req.params;
   const {
+    taxInvoiceNo,
     taxInvoiceAttachmentName,
     taxInvoiceAttachmentUrl,
     ewayBillAttachmentName,
@@ -648,6 +649,7 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
   const user = (req as any).user as AuthUser;
   const update: Partial<Sale> = {};
   const hasDocumentUpload =
+    taxInvoiceNo !== undefined ||
     taxInvoiceAttachmentName !== undefined ||
     taxInvoiceAttachmentUrl !== undefined ||
     ewayBillAttachmentName !== undefined ||
@@ -674,11 +676,21 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
     }
   }
 
+  if (taxInvoiceNo !== undefined) update.taxInvoiceNo = String(taxInvoiceNo).trim();
   if (taxInvoiceAttachmentName !== undefined) update.taxInvoiceAttachmentName = String(taxInvoiceAttachmentName);
   if (taxInvoiceAttachmentUrl !== undefined) update.taxInvoiceAttachmentUrl = String(taxInvoiceAttachmentUrl);
   if (ewayBillAttachmentName !== undefined) update.ewayBillAttachmentName = String(ewayBillAttachmentName);
   if (ewayBillAttachmentUrl !== undefined) update.ewayBillAttachmentUrl = String(ewayBillAttachmentUrl);
   if (paymentStatus !== undefined) update.paymentStatus = paymentStatus === "Confirmed" ? "Confirmed" : "Pending";
+
+  if (update.taxInvoiceNo) {
+    const duplicate = await c.sales.findOne({ taxInvoiceNo: update.taxInvoiceNo, id: { $ne: String(id) } });
+    if (duplicate) return fail(res, `Tax Invoice No. ${update.taxInvoiceNo} is already used on PI ${duplicate.referenceNo}`);
+  }
+
+  if (hasDocumentUpload && !(update.taxInvoiceNo || sale.taxInvoiceNo)) {
+    return fail(res, "Tax Invoice No. is required before accounts documents can be shared");
+  }
 
   if (
     (taxInvoiceAttachmentName !== undefined || taxInvoiceAttachmentUrl !== undefined || ewayBillAttachmentName !== undefined || ewayBillAttachmentUrl !== undefined) &&
