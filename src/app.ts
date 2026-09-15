@@ -30,6 +30,8 @@ function createCorsOptions() {
   const allowedOrigins = [
     "https://aurawatt.in",
     "https://www.aurawatt.in",
+    "https://erp.aurawatt.in",
+    "https://support.aurawatt.in",
     "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
     "http://localhost:3000",
     "http://127.0.0.1:3000",
