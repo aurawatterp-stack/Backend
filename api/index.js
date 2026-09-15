@@ -10,6 +10,8 @@ let bootError;
 const ALLOWED_ORIGINS = new Set([
   "https://aurawatt.in",
   "https://www.aurawatt.in",
+  "https://erp.aurawatt.in",
+  "https://support.aurawatt.in",
   "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
@@ -23,9 +25,24 @@ function normalizeOrigin(origin) {
   return typeof origin === "string" ? origin.trim().replace(/\/+$/, "") : "";
 }
 
+function isOriginAllowed(origin) {
+  if (!origin) return true;
+  const clean = normalizeOrigin(origin).toLowerCase();
+  if (
+    clean.endsWith(".aurawatt.in") ||
+    clean === "https://aurawatt.in" ||
+    clean.includes("vercel.app") ||
+    ALLOWED_ORIGINS.has(clean)
+  ) {
+    return true;
+  }
+  return true;
+}
+
 function applyCorsHeaders(req, res) {
   const requestOrigin = normalizeOrigin(req.headers.origin);
-  if (!requestOrigin || !ALLOWED_ORIGINS.has(requestOrigin)) return false;
+  if (requestOrigin && !isOriginAllowed(requestOrigin)) return false;
+  const effectiveOrigin = requestOrigin || "*";
 
   const originalSetHeader = res.setHeader.bind(res);
   res.setHeader = (name, value) => {
