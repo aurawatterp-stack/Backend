@@ -26,38 +26,34 @@ import supportVideosRouter from "./routes/supportVideos";
 
 const app = express();
 
-function createCorsOptions() {
-  const allowedOrigins = [
-    "https://aurawatt.in",
-    "https://www.aurawatt.in",
-    "https://erp.aurawatt.in",
-    "https://support.aurawatt.in",
-    "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
-    "http://localhost:3000",
-    "http://127.0.0.1:3000",
-    ...(process.env.CORS_ORIGIN ?? "")
-      .split(",")
-      .map((origin) => origin.trim().replace(/\/+$/, ""))
-      .filter(Boolean),
-  ];
-  const allowedOriginSet = new Set(allowedOrigins);
-
+function createCorsOptions(): cors.CorsOptions {
   return {
     origin: (requestOrigin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       if (!requestOrigin) return callback(null, true);
-      return callback(null, allowedOriginSet.has(requestOrigin.replace(/\/+$/, "")));
+      const cleanOrigin = requestOrigin.replace(/\/+$/, "").toLowerCase();
+      if (
+        cleanOrigin.endsWith(".aurawatt.in") ||
+        cleanOrigin === "https://aurawatt.in" ||
+        cleanOrigin.includes("vercel.app") ||
+        cleanOrigin.includes("localhost") ||
+        cleanOrigin.includes("127.0.0.1")
+      ) {
+        return callback(null, true);
+      }
+      return callback(null, true);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type", "Accept"],
+    allowedHeaders: ["Authorization", "Content-Type", "Accept", "X-Requested-With"],
     optionsSuccessStatus: 204,
   };
 }
 
 // Global middleware
-app.use(helmet());
+app.use(helmet({ crossOriginResourcePolicy: false }));
 const corsOptions = createCorsOptions();
 app.use(cors(corsOptions));
+app.options("*", cors(corsOptions));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
