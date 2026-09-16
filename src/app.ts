@@ -53,7 +53,6 @@ function createCorsOptions(): cors.CorsOptions {
 app.use(helmet({ crossOriginResourcePolicy: false }));
 const corsOptions = createCorsOptions();
 app.use(cors(corsOptions));
-app.options("*", cors(corsOptions));
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
