@@ -48,7 +48,7 @@ function applyCorsHeaders(req, res) {
   res.setHeader = (name, value) => {
     const headerName = String(name).toLowerCase();
     if (headerName === "access-control-allow-origin") {
-      return originalSetHeader(name, requestOrigin);
+      return originalSetHeader(name, effectiveOrigin);
     }
     if (headerName === "access-control-allow-credentials") {
       return originalSetHeader(name, "true");
@@ -56,7 +56,7 @@ function applyCorsHeaders(req, res) {
     return originalSetHeader(name, value);
   };
 
-  res.setHeader("access-control-allow-origin", requestOrigin);
+  res.setHeader("access-control-allow-origin", effectiveOrigin);
   res.setHeader("vary", "Origin");
   res.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
   res.setHeader("access-control-allow-headers", "Authorization,Content-Type,Accept");
