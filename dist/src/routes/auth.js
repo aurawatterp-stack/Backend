@@ -146,10 +146,11 @@ router.post("/login", async (req, res) => {
         user: { id: user.id, name: user.name, email: user.email, role, permissions, mobile: user.mobile, assignedStates: user.assignedStates ?? [] },
     });
 });
-// Helpful guard for accidental GET hits (e.g. opening the URL in a browser).
-router.all("/login", (req, res) => {
-    res.setHeader("Allow", "POST, OPTIONS");
-    return (0, http_1.fail)(res, `Method ${req.method} not allowed. Use POST /api/auth/login.`, 405);
+router.options("/login", (_req, res) => {
+    return res.status(204).end();
+});
+router.get("/login", (_req, res) => {
+    return (0, http_1.fail)(res, "Method GET not allowed. Use POST /api/auth/login.", 405);
 });
 /**
  * POST /api/auth/register

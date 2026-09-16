@@ -26,25 +26,71 @@ import supportVideosRouter from "./routes/supportVideos";
 
 const app = express();
 
+function isAllowedOrigin(origin: string): boolean {
+  if (!origin) return true;
+  const clean = origin.trim().replace(/\/+$/, "").toLowerCase();
+
+  if (process.env.CORS_ORIGIN === "*") return true;
+
+  try {
+    const url = new URL(clean);
+    const hostname = url.hostname;
+    if (
+      hostname === "aurawatt.in" ||
+      hostname.endsWith(".aurawatt.in") ||
+      hostname.endsWith(".vercel.app") ||
+      hostname === "localhost" ||
+      hostname === "127.0.0.1"
+    ) {
+      return true;
+    }
+  } catch {
+    // Fallback if URL parsing fails
+  }
+
+  if (
+    clean.endsWith(".aurawatt.in") ||
+    clean === "https://aurawatt.in" ||
+    clean.includes("vercel.app") ||
+    clean.includes("localhost") ||
+    clean.includes("127.0.0.1")
+  ) {
+    return true;
+  }
+
+  if (process.env.CORS_ORIGIN) {
+    const customOrigins = process.env.CORS_ORIGIN.split(",").map((s) => s.trim().toLowerCase());
+    if (customOrigins.includes(clean) || customOrigins.includes("*")) return true;
+  }
+
+  return true;
+}
+
 function createCorsOptions(): cors.CorsOptions {
   return {
     origin: (requestOrigin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
       if (!requestOrigin) return callback(null, true);
-      const cleanOrigin = requestOrigin.replace(/\/+$/, "").toLowerCase();
-      if (
-        cleanOrigin.endsWith(".aurawatt.in") ||
-        cleanOrigin === "https://aurawatt.in" ||
-        cleanOrigin.includes("vercel.app") ||
-        cleanOrigin.includes("localhost") ||
-        cleanOrigin.includes("127.0.0.1")
-      ) {
+      if (isAllowedOrigin(requestOrigin)) {
         return callback(null, true);
       }
       return callback(null, true);
     },
     credentials: true,
     methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-    allowedHeaders: ["Authorization", "Content-Type", "Accept", "X-Requested-With"],
+    allowedHeaders: [
+      "Authorization",
+      "Content-Type",
+      "Accept",
+      "X-Requested-With",
+      "Origin",
+      "Access-Control-Request-Method",
+      "Access-Control-Request-Headers",
+      "Cache-Control",
+      "Pragma",
+      "X-HTTP-Method-Override",
+    ],
+    exposedHeaders: ["Content-Length", "Content-Type", "Authorization"],
+    maxAge: 86400,
     optionsSuccessStatus: 204,
   };
 }

@@ -15,10 +15,6 @@ const ALLOWED_ORIGINS = new Set([
   "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
   "http://localhost:3000",
   "http://127.0.0.1:3000",
-  ...(process.env.CORS_ORIGIN || "")
-    .split(",")
-    .map((origin) => normalizeOrigin(origin))
-    .filter(Boolean),
 ]);
 
 function normalizeOrigin(origin) {
@@ -28,39 +24,74 @@ function normalizeOrigin(origin) {
 function isOriginAllowed(origin) {
   if (!origin) return true;
   const clean = normalizeOrigin(origin).toLowerCase();
+
+  if (process.env.CORS_ORIGIN === "*") return true;
+
+  try {
+    const url = new URL(clean);
+    const hostname = url.hostname;
+    if (
+      hostname === "aurawatt.in" ||
+      hostname.endsWith(".aurawatt.in") ||
+      hostname.endsWith(".vercel.app") ||
+      hostname === "localhost" ||
+      hostname === "127.0.0.1"
+    ) {
+      return true;
+    }
+  } catch (e) {
+    // ignore
+  }
+
   if (
     clean.endsWith(".aurawatt.in") ||
     clean === "https://aurawatt.in" ||
     clean.includes("vercel.app") ||
+    clean.includes("localhost") ||
+    clean.includes("127.0.0.1") ||
     ALLOWED_ORIGINS.has(clean)
   ) {
     return true;
   }
+
+  if (process.env.CORS_ORIGIN) {
+    const customOrigins = process.env.CORS_ORIGIN.split(",").map((s) => s.trim().toLowerCase());
+    if (customOrigins.includes(clean) || customOrigins.includes("*")) return true;
+  }
+
   return true;
 }
 
 function applyCorsHeaders(req, res) {
-  const requestOrigin = normalizeOrigin(req.headers.origin);
-  if (requestOrigin && !isOriginAllowed(requestOrigin)) return false;
-  const effectiveOrigin = requestOrigin || "*";
+  const rawOrigin = req.headers && req.headers.origin;
+  const requestOrigin = normalizeOrigin(rawOrigin);
 
-  const originalSetHeader = res.setHeader.bind(res);
-  res.setHeader = (name, value) => {
-    const headerName = String(name).toLowerCase();
-    if (headerName === "access-control-allow-origin") {
-      return originalSetHeader(name, effectiveOrigin);
-    }
-    if (headerName === "access-control-allow-credentials") {
-      return originalSetHeader(name, "true");
-    }
-    return originalSetHeader(name, value);
-  };
+  if (requestOrigin && isOriginAllowed(requestOrigin)) {
+    res.setHeader("access-control-allow-origin", requestOrigin);
+    res.setHeader("access-control-allow-credentials", "true");
+  } else if (!requestOrigin) {
+    // For requests without an Origin header, allow wildcard without setting credentials: true
+    res.setHeader("access-control-allow-origin", "*");
+  } else {
+    res.setHeader("access-control-allow-origin", requestOrigin);
+    res.setHeader("access-control-allow-credentials", "true");
+  }
 
-  res.setHeader("access-control-allow-origin", effectiveOrigin);
   res.setHeader("vary", "Origin");
-  res.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-  res.setHeader("access-control-allow-headers", "Authorization,Content-Type,Accept");
-  res.setHeader("access-control-allow-credentials", "true");
+  res.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+
+  const requestedHeaders = req.headers && req.headers["access-control-request-headers"];
+  if (requestedHeaders) {
+    res.setHeader("access-control-allow-headers", requestedHeaders);
+  } else {
+    res.setHeader(
+      "access-control-allow-headers",
+      "Authorization, Content-Type, Accept, X-Requested-With, Origin, Access-Control-Request-Method, Access-Control-Request-Headers, Cache-Control, Pragma, X-HTTP-Method-Override"
+    );
+  }
+
+  res.setHeader("access-control-expose-headers", "Content-Length, Content-Type, Authorization");
+  res.setHeader("access-control-max-age", "86400");
   return true;
 }
 
@@ -80,24 +111,21 @@ function loadApp() {
 
 module.exports = (req, res) => {
   try {
-    const app = loadApp();
-    const corsApplied = applyCorsHeaders(req, res);
+    applyCorsHeaders(req, res);
 
-    if (corsApplied && req.method === "OPTIONS") {
+    if (req.method === "OPTIONS") {
       res.statusCode = 204;
       return res.end();
     }
 
+    const app = loadApp();
+
     // When routed via `vercel.json`, `__path` contains the original request path.
-    // Prefer that value because Vercel's internal rewrite headers can point back
-    // at the function path itself (for example `/api/index.js`), which breaks
-    // Express route matching.
     if (req.query && typeof req.query.__path === "string") {
       const restored = `/${req.query.__path}`.replace(/\/{2,}/g, "/");
       req.url = restored;
       delete req.query.__path;
     } else {
-      // Fallback for runtimes that don't provide `__path`: preserve the original pathname.
       const original =
         req.headers["x-vercel-rewrite"] ||
         req.headers["x-forwarded-uri"] ||
@@ -110,12 +138,19 @@ module.exports = (req, res) => {
     }
     return app(req, res);
   } catch (err) {
-    // Avoid FUNCTION_INVOCATION_FAILED with empty body; return a deterministic 500 instead.
     console.error("[BOOT_ERROR]", err);
-    // Ensure browser can read the response for debugging even during CORS preflight.
-    res.setHeader("access-control-allow-origin", "*");
-    res.setHeader("access-control-allow-methods", "GET,POST,PUT,PATCH,DELETE,OPTIONS");
-    res.setHeader("access-control-allow-headers", "authorization,content-type");
+    const requestOrigin = req.headers && req.headers.origin;
+    if (requestOrigin) {
+      res.setHeader("access-control-allow-origin", requestOrigin);
+      res.setHeader("access-control-allow-credentials", "true");
+    } else {
+      res.setHeader("access-control-allow-origin", "*");
+    }
+    res.setHeader("access-control-allow-methods", "GET, POST, PUT, PATCH, DELETE, OPTIONS");
+    res.setHeader(
+      "access-control-allow-headers",
+      "Authorization, Content-Type, Accept, X-Requested-With, Origin, Access-Control-Request-Method, Access-Control-Request-Headers"
+    );
     res.statusCode = 500;
     res.setHeader("content-type", "text/plain; charset=utf-8");
     const details =

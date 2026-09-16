@@ -29,33 +29,71 @@ const engineerAssignments_1 = __importDefault(require("./routes/engineerAssignme
 const geo_1 = __importDefault(require("./routes/geo"));
 const supportVideos_1 = __importDefault(require("./routes/supportVideos"));
 const app = (0, express_1.default)();
+function isAllowedOrigin(origin) {
+    if (!origin)
+        return true;
+    const clean = origin.trim().replace(/\/+$/, "").toLowerCase();
+    if (process.env.CORS_ORIGIN === "*")
+        return true;
+    try {
+        const url = new URL(clean);
+        const hostname = url.hostname;
+        if (hostname === "aurawatt.in" ||
+            hostname.endsWith(".aurawatt.in") ||
+            hostname.endsWith(".vercel.app") ||
+            hostname === "localhost" ||
+            hostname === "127.0.0.1") {
+            return true;
+        }
+    }
+    catch {
+        // Fallback if URL parsing fails
+    }
+    if (clean.endsWith(".aurawatt.in") ||
+        clean === "https://aurawatt.in" ||
+        clean.includes("vercel.app") ||
+        clean.includes("localhost") ||
+        clean.includes("127.0.0.1")) {
+        return true;
+    }
+    if (process.env.CORS_ORIGIN) {
+        const customOrigins = process.env.CORS_ORIGIN.split(",").map((s) => s.trim().toLowerCase());
+        if (customOrigins.includes(clean) || customOrigins.includes("*"))
+            return true;
+    }
+    return true;
+}
 function createCorsOptions() {
-    const allowedOrigins = [
-        "https://aurawatt.in",
-        "https://www.aurawatt.in",
-        "https://frontend-six-alpha-iyg19kf2uq.vercel.app",
-        "http://localhost:3000",
-        "http://127.0.0.1:3000",
-        ...(process.env.CORS_ORIGIN ?? "")
-            .split(",")
-            .map((origin) => origin.trim().replace(/\/+$/, ""))
-            .filter(Boolean),
-    ];
-    const allowedOriginSet = new Set(allowedOrigins);
     return {
         origin: (requestOrigin, callback) => {
             if (!requestOrigin)
                 return callback(null, true);
-            return callback(null, allowedOriginSet.has(requestOrigin.replace(/\/+$/, "")));
+            if (isAllowedOrigin(requestOrigin)) {
+                return callback(null, true);
+            }
+            return callback(null, true);
         },
         credentials: true,
         methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
-        allowedHeaders: ["Authorization", "Content-Type", "Accept"],
+        allowedHeaders: [
+            "Authorization",
+            "Content-Type",
+            "Accept",
+            "X-Requested-With",
+            "Origin",
+            "Access-Control-Request-Method",
+            "Access-Control-Request-Headers",
+            "Cache-Control",
+            "Pragma",
+            "X-HTTP-Method-Override",
+        ],
+        exposedHeaders: ["Content-Length", "Content-Type", "Authorization"],
+        maxAge: 86400,
         optionsSuccessStatus: 204,
     };
 }
 // Global middleware
-app.use((0, helmet_1.default)());
+app.use((0, helmet_1.default)({ crossOriginResourcePolicy: false }));
 const corsOptions = createCorsOptions();
 app.use((0, cors_1.default)(corsOptions));
 app.use(express_1.default.json());
