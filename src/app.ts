@@ -90,7 +90,7 @@ function createCorsOptions(): cors.CorsOptions {
       "X-HTTP-Method-Override",
     ],
     exposedHeaders: ["Content-Length", "Content-Type", "Authorization"],
-    maxAge: 86400,
+    maxAge: 600,
     optionsSuccessStatus: 204,
   };
 }
@@ -99,6 +99,15 @@ function createCorsOptions(): cors.CorsOptions {
 app.use(helmet({ crossOriginResourcePolicy: false }));
 const corsOptions = createCorsOptions();
 app.use(cors(corsOptions));
+
+// Prevent browser/CDN caching on API routes to avoid stale data and cached CORS errors
+app.use("/api", (_req, res, next) => {
+  res.setHeader("Cache-Control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("Pragma", "no-cache");
+  res.setHeader("Expires", "0");
+  res.setHeader("Surrogate-Control", "no-store");
+  next();
+});
 
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

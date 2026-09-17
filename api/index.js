@@ -91,7 +91,10 @@ function applyCorsHeaders(req, res) {
   }
 
   res.setHeader("access-control-expose-headers", "Content-Length, Content-Type, Authorization");
-  res.setHeader("access-control-max-age", "86400");
+  res.setHeader("access-control-max-age", "600");
+  res.setHeader("cache-control", "no-store, no-cache, must-revalidate, proxy-revalidate");
+  res.setHeader("pragma", "no-cache");
+  res.setHeader("expires", "0");
   return true;
 }
 
