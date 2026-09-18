@@ -74,7 +74,7 @@ function piYearFromDate(value: unknown) {
 }
 
 function isPlaceholderPiNumber(value: string) {
-  return /^PI-\d{4}-X+$/i.test(value);
+  return /^(AVAV\/PI\/2627\/X+|PI-\d{4}-X+)$/i.test(value.trim());
 }
 
 function normalizePriceCategoryForRegistration(isRegistered: boolean, priceCategory?: string) {
@@ -145,15 +145,15 @@ async function resolveManufacturedProductForSerial(
   return fallbackManufactured;
 }
 
-async function nextPiNumber(c: SalesCollections, year = new Date().getFullYear()) {
+async function nextPiNumber(c: SalesCollections, _year = new Date().getFullYear()) {
   const rows = await c.sales
-    .find({ referenceNo: { $regex: `^PI-${year}-\\d+$`, $options: "i" } }, { projection: { referenceNo: 1 } })
+    .find({ referenceNo: { $regex: `^(AVAV/PI/2627/|PI-)`, $options: "i" } }, { projection: { referenceNo: 1 } })
     .toArray();
   const maxNumber = rows.reduce((max, row) => {
-    const match = String(row.referenceNo ?? "").match(new RegExp(`^PI-${year}-(\\d+)$`, "i"));
+    const match = String(row.referenceNo ?? "").match(/(?:AVAV\/PI\/2627\/|PI-\d{4}-|PI-)(\d+)/i);
     return match ? Math.max(max, Number(match[1]) || 0) : max;
   }, 0);
-  return `PI-${year}-${String(maxNumber + 1).padStart(4, "0")}`;
+  return `AVAV/PI/2627/${String(maxNumber + 1).padStart(4, "0")}`;
 }
 
 async function resolveUniquePiNumber(c: SalesCollections, value: unknown, saleDate: unknown, excludeSaleId?: string) {
@@ -676,7 +676,14 @@ router.put("/:id/accounts", authenticate, requireAnyPermission("accounts:manage"
     }
   }
 
-  if (taxInvoiceNo !== undefined) update.taxInvoiceNo = String(taxInvoiceNo).trim();
+  if (taxInvoiceNo !== undefined) {
+    const rawTi = String(taxInvoiceNo).trim();
+    if (rawTi) {
+      update.taxInvoiceNo = /^AVAV\/TI\/2627\//i.test(rawTi) ? rawTi.toUpperCase() : `AVAV/TI/2627/${rawTi}`;
+    } else {
+      update.taxInvoiceNo = "";
+    }
+  }
   if (taxInvoiceAttachmentName !== undefined) update.taxInvoiceAttachmentName = String(taxInvoiceAttachmentName);
   if (taxInvoiceAttachmentUrl !== undefined) update.taxInvoiceAttachmentUrl = String(taxInvoiceAttachmentUrl);
   if (ewayBillAttachmentName !== undefined) update.ewayBillAttachmentName = String(ewayBillAttachmentName);
