@@ -29,7 +29,7 @@ async function runSeed() {
   const workbook = XLSX.readFile(targetPath);
   const sheetName = workbook.SheetNames[0];
   const sheet = workbook.Sheets[sheetName];
-  const rawRows = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, { header: 1 });
+  const rawRows = XLSX.utils.sheet_to_json<unknown[]>(sheet, { header: 1 });
 
   console.log(`Loaded sheet "${sheetName}" with ${rawRows.length} total rows.`);
 

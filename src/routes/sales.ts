@@ -26,12 +26,22 @@ function parsePiItems(value: unknown): Sale["piItems"] {
     const materialName = String(row.materialName ?? "").trim();
     const quantity = Number(row.quantity);
     const rate = Number(row.rate);
+    const discount = row.discount !== undefined && row.discount !== null && row.discount !== "" ? Number(row.discount) : undefined;
     const gstRate = Number(row.gstRate);
+    const isFreight = Boolean(row.isFreight);
     const hsnSac = String(row.hsnSac ?? "8504").trim() || "8504";
     if (!materialName || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(rate) || rate < 0 || !Number.isFinite(gstRate) || gstRate < 0) {
       continue;
     }
-    parsed.push({ materialName, hsnSac, quantity, rate, gstRate });
+    parsed.push({
+      materialName,
+      hsnSac,
+      quantity,
+      rate,
+      discount: Number.isFinite(discount) ? discount : undefined,
+      gstRate,
+      isFreight: isFreight || undefined,
+    });
   }
   return parsed;
 }
