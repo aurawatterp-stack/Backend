@@ -66,6 +66,8 @@ export type PendingCustomerRegistration = {
   phone: string;
   address?: string;
   stateRegion?: string;
+  state?: string;
+  district?: string;
   registrationCode?: string;
   dateOfRegistration?: Date;
   gst?: string;
@@ -215,6 +217,8 @@ export type Customer = {
   registrationCode?: string;
   address?: string;
   stateRegion?: string;
+  state?: string;
+  district?: string;
   dateOfRegistration?: Date;
   gst?: string;
   cinNo?: string;

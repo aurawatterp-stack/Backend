@@ -341,6 +341,8 @@ router.post("/request-registration", authenticate, requireAnyPermission("sales:e
     phone,
     address,
     stateRegion,
+    state,
+    district,
     registrationCode,
     dateOfRegistration,
     gst,
@@ -392,6 +394,8 @@ router.post("/request-registration", authenticate, requireAnyPermission("sales:e
     phone: normalizedPhone,
     address: address ? String(address).trim() : undefined,
     stateRegion: stateRegion ? String(stateRegion).trim() : undefined,
+    state: state ? String(state).trim() : undefined,
+    district: district ? String(district).trim() : undefined,
     registrationCode: registrationCode ? String(registrationCode).trim() : undefined,
     dateOfRegistration: dateOfRegistration ? new Date(dateOfRegistration) : undefined,
     gst: normalizedGst || undefined,
@@ -458,6 +462,8 @@ router.put("/pending-registrations/:id", authenticate, requireAnyPermission("cus
     phone,
     address,
     stateRegion,
+    state,
+    district,
     registrationCode,
     dateOfRegistration,
     gst,
@@ -487,11 +493,14 @@ router.put("/pending-registrations/:id", authenticate, requireAnyPermission("cus
   if (nextPhone) duplicateChecks.push({ phone: nextPhone });
   if (nextGst) duplicateChecks.push({ gst: nextGst });
   if (nextPan) duplicateChecks.push({ pan: nextPan });
+
+  const currentIdFilter = { id: { $ne: pending.id } };
   if (duplicateChecks.length) {
-    const duplicateCustomer = await c.customers.findOne({ $or: duplicateChecks }, { projection: { id: 1 } });
+    const duplicateCustomer = await c.customers.findOne({ $and: [currentIdFilter, { $or: duplicateChecks }] }, { projection: { id: 1 } });
     if (duplicateCustomer) return fail(res, "This distributor is already registered");
+
     const duplicatePending = await c.pendingCustomerRegistrations.findOne(
-      { id: { $ne: pending.id }, $or: duplicateChecks },
+      { $and: [currentIdFilter, { $or: duplicateChecks }, { $or: [{ status: "Pending" }, { status: { $exists: false } }] }] },
       { projection: { id: 1 } }
     );
     if (duplicatePending) return fail(res, "A distributor registration request is already pending for these details");
@@ -505,6 +514,8 @@ router.put("/pending-registrations/:id", authenticate, requireAnyPermission("cus
     phone: nextPhone,
     address: address !== undefined ? String(address).trim() : pending.address,
     stateRegion: stateRegion !== undefined ? String(stateRegion).trim() : pending.stateRegion,
+    state: state !== undefined ? String(state).trim() : pending.state,
+    district: district !== undefined ? String(district).trim() : pending.district,
     registrationCode: registrationCode !== undefined ? String(registrationCode).trim() : pending.registrationCode,
     dateOfRegistration: dateOfRegistration !== undefined ? (dateOfRegistration ? new Date(String(dateOfRegistration)) : undefined) : pending.dateOfRegistration,
     gst: nextGst || undefined,
@@ -682,6 +693,8 @@ router.post("/approve/:id", authenticate, requireAnyPermission("customers:manage
     phone: pending.phone,
     address: pending.address || pending.billingAddress,
     stateRegion: pending.stateRegion,
+    state: pending.state,
+    district: pending.district,
     dateOfRegistration: pending.dateOfRegistration,
     gst: pending.gst,
     cinNo: pending.cinNo,
@@ -734,6 +747,8 @@ router.post("/", authenticate, requireAnyPermission("customers:manage", "sales:e
     phone,
     address,
     stateRegion,
+    state,
+    district,
     registrationCode,
     dateOfRegistration,
     gst,
@@ -766,6 +781,8 @@ router.post("/", authenticate, requireAnyPermission("customers:manage", "sales:e
     phone: nextPhone,
     address: nextAddress,
     stateRegion: stateRegion ? String(stateRegion).trim() : undefined,
+    state: state ? String(state).trim() : undefined,
+    district: district ? String(district).trim() : undefined,
     registrationCode: registrationCode ? String(registrationCode).trim() : undefined,
     dateOfRegistration: dateOfRegistration ? new Date(String(dateOfRegistration)) : undefined,
     gst: gst ? String(gst).trim() : undefined,
@@ -802,6 +819,8 @@ router.put("/:id", authenticate, requireAnyPermission("customers:manage"), async
     phone: req.body.phone !== undefined ? String(req.body.phone).trim() : undefined,
     address: req.body.address !== undefined ? String(req.body.address).trim() : undefined,
     stateRegion: req.body.stateRegion !== undefined ? String(req.body.stateRegion).trim() : undefined,
+    state: req.body.state !== undefined ? String(req.body.state).trim() : undefined,
+    district: req.body.district !== undefined ? String(req.body.district).trim() : undefined,
     registrationCode: req.body.registrationCode !== undefined ? String(req.body.registrationCode).trim() : undefined,
     dateOfRegistration: req.body.dateOfRegistration !== undefined ? (req.body.dateOfRegistration ? new Date(String(req.body.dateOfRegistration)) : undefined) : undefined,
     gst: req.body.gst !== undefined ? String(req.body.gst).trim() : undefined,
