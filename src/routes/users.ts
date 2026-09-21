@@ -101,7 +101,15 @@ router.get("/sales-persons", authenticate, async (_req: Request, res: Response) 
   const allUsers = await c.users.find({ isActive: { $ne: false } }).toArray();
   const salesUsers = allUsers.filter((u) => {
     const role = String(u.role || "").toLowerCase();
-    return role.includes("sales") || role === "admin" || role === "sales manager" || role === "sales executive";
+    return (
+      role.includes("sales") ||
+      role.includes("bd") ||
+      role.includes("business") ||
+      role === "admin" ||
+      role === "sales manager" ||
+      role === "sales executive" ||
+      role === "sales representative"
+    );
   });
   const targetUsers = salesUsers.length > 0 ? salesUsers : allUsers;
   const safe = targetUsers.map((u) => ({
