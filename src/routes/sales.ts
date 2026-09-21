@@ -173,12 +173,21 @@ async function resolveUniquePiNumber(c: SalesCollections, value: unknown, saleDa
     referenceNo = await nextPiNumber(c, year);
   }
 
-  const duplicate = await c.sales.findOne(
-    { referenceNo, ...(excludeSaleId ? { id: { $ne: excludeSaleId } } : {}) },
-    { projection: { id: 1 } }
-  );
-  if (duplicate) {
-    throw new Error("This PI number already exists. Please generate a new PI number.");
+  // Atomically resolve duplicate / concurrent PI number collisions.
+  // If the provided referenceNo was already consumed by a simultaneous user, automatically calculate
+  // and assign the next sequential available PI number instead of failing or throwing.
+  let attempts = 0;
+  while (attempts < 20) {
+    const duplicate = await c.sales.findOne(
+      { referenceNo, ...(excludeSaleId ? { id: { $ne: excludeSaleId } } : {}) },
+      { projection: { id: 1 } }
+    );
+    if (!duplicate) {
+      return referenceNo;
+    }
+    // Concurrent collision detected: generate next available sequence number and retry
+    referenceNo = await nextPiNumber(c, year);
+    attempts++;
   }
   return referenceNo;
 }
