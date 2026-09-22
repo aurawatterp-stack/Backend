@@ -163,7 +163,7 @@ async function nextPiNumber(c: SalesCollections, _year = new Date().getFullYear(
     const match = String(row.referenceNo ?? "").match(/(?:AVAV\/PI\/2627\/|PI-\d{4}-|PI-)(\d+)/i);
     return match ? Math.max(max, Number(match[1]) || 0) : max;
   }, 0);
-  return `AVAV/PI/2627/${String(maxNumber + 1).padStart(4, "0")}`;
+  return `PI-${_year}-${String(maxNumber + 1).padStart(4, "0")}`;
 }
 
 async function resolveUniquePiNumber(c: SalesCollections, value: unknown, saleDate: unknown, excludeSaleId?: string) {
