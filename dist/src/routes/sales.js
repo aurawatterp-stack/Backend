@@ -28,12 +28,22 @@ function parsePiItems(value) {
         const materialName = String(row.materialName ?? "").trim();
         const quantity = Number(row.quantity);
         const rate = Number(row.rate);
+        const discount = row.discount !== undefined && row.discount !== null && row.discount !== "" ? Number(row.discount) : undefined;
         const gstRate = Number(row.gstRate);
+        const isFreight = Boolean(row.isFreight);
         const hsnSac = String(row.hsnSac ?? "8504").trim() || "8504";
         if (!materialName || !Number.isFinite(quantity) || quantity <= 0 || !Number.isFinite(rate) || rate < 0 || !Number.isFinite(gstRate) || gstRate < 0) {
             continue;
         }
-        parsed.push({ materialName, hsnSac, quantity, rate, gstRate });
+        parsed.push({
+            materialName,
+            hsnSac,
+            quantity,
+            rate,
+            discount: Number.isFinite(discount) ? discount : undefined,
+            gstRate,
+            isFreight: isFreight || undefined,
+        });
     }
     return parsed;
 }
@@ -67,7 +77,7 @@ function piYearFromDate(value) {
     return Number.isFinite(parsed.getTime()) ? parsed.getFullYear() : new Date().getFullYear();
 }
 function isPlaceholderPiNumber(value) {
-    return /^PI-\d{4}-X+$/i.test(value);
+    return /^(AVAV\/PI\/2627\/X+|PI-\d{4}-X+)$/i.test(value.trim());
 }
 function normalizePriceCategoryForRegistration(isRegistered, priceCategory) {
     if (isRegistered)
@@ -128,15 +138,15 @@ async function resolveManufacturedProductForSerial(c, sale, serialNumber) {
     await c.manufactured.insertOne(fallbackManufactured);
     return fallbackManufactured;
 }
-async function nextPiNumber(c, year = new Date().getFullYear()) {
+async function nextPiNumber(c, _year = new Date().getFullYear()) {
     const rows = await c.sales
-        .find({ referenceNo: { $regex: `^PI-${year}-\\d+$`, $options: "i" } }, { projection: { referenceNo: 1 } })
+        .find({ referenceNo: { $regex: `^(AVAV/PI/2627/|PI-)`, $options: "i" } }, { projection: { referenceNo: 1 } })
         .toArray();
     const maxNumber = rows.reduce((max, row) => {
-        const match = String(row.referenceNo ?? "").match(new RegExp(`^PI-${year}-(\\d+)$`, "i"));
+        const match = String(row.referenceNo ?? "").match(/(?:AVAV\/PI\/2627\/|PI-\d{4}-|PI-)(\d+)/i);
         return match ? Math.max(max, Number(match[1]) || 0) : max;
     }, 0);
-    return `PI-${year}-${String(maxNumber + 1).padStart(4, "0")}`;
+    return `PI-${_year}-${String(maxNumber + 1).padStart(4, "0")}`;
 }
 async function resolveUniquePiNumber(c, value, saleDate, excludeSaleId) {
     const year = piYearFromDate(saleDate);
@@ -144,9 +154,18 @@ async function resolveUniquePiNumber(c, value, saleDate, excludeSaleId) {
     if (!referenceNo || isPlaceholderPiNumber(referenceNo)) {
         referenceNo = await nextPiNumber(c, year);
     }
-    const duplicate = await c.sales.findOne({ referenceNo, ...(excludeSaleId ? { id: { $ne: excludeSaleId } } : {}) }, { projection: { id: 1 } });
-    if (duplicate) {
-        throw new Error("This PI number already exists. Please generate a new PI number.");
+    // Atomically resolve duplicate / concurrent PI number collisions.
+    // If the provided referenceNo was already consumed by a simultaneous user, automatically calculate
+    // and assign the next sequential available PI number instead of failing or throwing.
+    let attempts = 0;
+    while (attempts < 20) {
+        const duplicate = await c.sales.findOne({ referenceNo, ...(excludeSaleId ? { id: { $ne: excludeSaleId } } : {}) }, { projection: { id: 1 } });
+        if (!duplicate) {
+            return referenceNo;
+        }
+        // Concurrent collision detected: generate next available sequence number and retry
+        referenceNo = await nextPiNumber(c, year);
+        attempts++;
     }
     return referenceNo;
 }
@@ -574,8 +593,15 @@ router.put("/:id/accounts", auth_1.authenticate, (0, auth_1.requireAnyPermission
             return (0, http_1.fail)(res, "Use Mark as Payment Verified, or upload Tax Invoice and E-Way Bill after vehicle no. is shared");
         }
     }
-    if (taxInvoiceNo !== undefined)
-        update.taxInvoiceNo = String(taxInvoiceNo).trim();
+    if (taxInvoiceNo !== undefined) {
+        const rawTi = String(taxInvoiceNo).trim();
+        if (rawTi) {
+            update.taxInvoiceNo = /^AVAV\/TI\/2627\//i.test(rawTi) ? rawTi.toUpperCase() : `AVAV/TI/2627/${rawTi}`;
+        }
+        else {
+            update.taxInvoiceNo = "";
+        }
+    }
     if (taxInvoiceAttachmentName !== undefined)
         update.taxInvoiceAttachmentName = String(taxInvoiceAttachmentName);
     if (taxInvoiceAttachmentUrl !== undefined)

@@ -327,7 +327,7 @@ router.post("/upload-document", auth_1.authenticate, (0, auth_1.requireAnyPermis
 router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyPermission)("sales:entry"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
     const user = req.user;
-    const { name, type, email, phone, address, stateRegion, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
+    const { name, type, email, phone, address, stateRegion, state, district, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
     const normalizedEmail = String(email ?? "").trim().toLowerCase();
     const normalizedType = type === "Individual" ? "Individual" : "Distributor";
     const normalizedPhone = String(phone ?? "").trim();
@@ -361,6 +361,8 @@ router.post("/request-registration", auth_1.authenticate, (0, auth_1.requireAnyP
         phone: normalizedPhone,
         address: address ? String(address).trim() : undefined,
         stateRegion: stateRegion ? String(stateRegion).trim() : undefined,
+        state: state ? String(state).trim() : undefined,
+        district: district ? String(district).trim() : undefined,
         registrationCode: registrationCode ? String(registrationCode).trim() : undefined,
         dateOfRegistration: dateOfRegistration ? new Date(dateOfRegistration) : undefined,
         gst: normalizedGst || undefined,
@@ -420,7 +422,7 @@ router.put("/pending-registrations/:id", auth_1.authenticate, (0, auth_1.require
         return (0, http_1.fail)(res, "Pending distributor registration not found", 404);
     if (pending.status === "Approved")
         return (0, http_1.fail)(res, "Approved request cannot be edited");
-    const { name, type, email, phone, address, stateRegion, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
+    const { name, type, email, phone, address, stateRegion, state, district, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
     const nextName = String(name ?? pending.name ?? "").trim();
     const nextPhone = String(phone ?? pending.phone ?? "").trim();
     const nextEmail = String(email ?? pending.email ?? "").trim().toLowerCase();
@@ -437,11 +439,12 @@ router.put("/pending-registrations/:id", auth_1.authenticate, (0, auth_1.require
         duplicateChecks.push({ gst: nextGst });
     if (nextPan)
         duplicateChecks.push({ pan: nextPan });
+    const currentIdFilter = { id: { $ne: pending.id } };
     if (duplicateChecks.length) {
-        const duplicateCustomer = await c.customers.findOne({ $or: duplicateChecks }, { projection: { id: 1 } });
+        const duplicateCustomer = await c.customers.findOne({ $and: [currentIdFilter, { $or: duplicateChecks }] }, { projection: { id: 1 } });
         if (duplicateCustomer)
             return (0, http_1.fail)(res, "This distributor is already registered");
-        const duplicatePending = await c.pendingCustomerRegistrations.findOne({ id: { $ne: pending.id }, $or: duplicateChecks }, { projection: { id: 1 } });
+        const duplicatePending = await c.pendingCustomerRegistrations.findOne({ $and: [currentIdFilter, { $or: duplicateChecks }, { $or: [{ status: "Pending" }, { status: { $exists: false } }] }] }, { projection: { id: 1 } });
         if (duplicatePending)
             return (0, http_1.fail)(res, "A distributor registration request is already pending for these details");
     }
@@ -453,6 +456,8 @@ router.put("/pending-registrations/:id", auth_1.authenticate, (0, auth_1.require
         phone: nextPhone,
         address: address !== undefined ? String(address).trim() : pending.address,
         stateRegion: stateRegion !== undefined ? String(stateRegion).trim() : pending.stateRegion,
+        state: state !== undefined ? String(state).trim() : pending.state,
+        district: district !== undefined ? String(district).trim() : pending.district,
         registrationCode: registrationCode !== undefined ? String(registrationCode).trim() : pending.registrationCode,
         dateOfRegistration: dateOfRegistration !== undefined ? (dateOfRegistration ? new Date(String(dateOfRegistration)) : undefined) : pending.dateOfRegistration,
         gst: nextGst || undefined,
@@ -621,6 +626,8 @@ router.post("/approve/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission
         phone: pending.phone,
         address: pending.address || pending.billingAddress,
         stateRegion: pending.stateRegion,
+        state: pending.state,
+        district: pending.district,
         dateOfRegistration: pending.dateOfRegistration,
         gst: pending.gst,
         cinNo: pending.cinNo,
@@ -661,7 +668,7 @@ router.get("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("custom
 /** POST /api/customers */
 router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customers:manage", "sales:entry", "dispatch:manage"), async (req, res) => {
     const c = await (0, collections_1.getCollections)();
-    const { name, type, email, phone, address, stateRegion, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
+    const { name, type, email, phone, address, stateRegion, state, district, registrationCode, dateOfRegistration, gst, cinNo, pan, tan, contactPersonName, billingAddress, deliveryAddress1, deliveryAddress2, deliveryAddress3, areaAllotted, distributorshipType, documentsUploaded, relevantSalesPerson, } = req.body;
     const nextName = String(name ?? "").trim();
     const nextType = String(type ?? "Distributor").trim();
     const nextEmail = String(email ?? "").trim().toLowerCase();
@@ -678,6 +685,8 @@ router.post("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("customer
         phone: nextPhone,
         address: nextAddress,
         stateRegion: stateRegion ? String(stateRegion).trim() : undefined,
+        state: state ? String(state).trim() : undefined,
+        district: district ? String(district).trim() : undefined,
         registrationCode: registrationCode ? String(registrationCode).trim() : undefined,
         dateOfRegistration: dateOfRegistration ? new Date(String(dateOfRegistration)) : undefined,
         gst: gst ? String(gst).trim() : undefined,
@@ -714,6 +723,8 @@ router.put("/:id", auth_1.authenticate, (0, auth_1.requireAnyPermission)("custom
         phone: req.body.phone !== undefined ? String(req.body.phone).trim() : undefined,
         address: req.body.address !== undefined ? String(req.body.address).trim() : undefined,
         stateRegion: req.body.stateRegion !== undefined ? String(req.body.stateRegion).trim() : undefined,
+        state: req.body.state !== undefined ? String(req.body.state).trim() : undefined,
+        district: req.body.district !== undefined ? String(req.body.district).trim() : undefined,
         registrationCode: req.body.registrationCode !== undefined ? String(req.body.registrationCode).trim() : undefined,
         dateOfRegistration: req.body.dateOfRegistration !== undefined ? (req.body.dateOfRegistration ? new Date(String(req.body.dateOfRegistration)) : undefined) : undefined,
         gst: req.body.gst !== undefined ? String(req.body.gst).trim() : undefined,

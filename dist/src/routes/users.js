@@ -82,6 +82,33 @@ router.get("/", auth_1.authenticate, (0, auth_1.requireAnyPermission)("users:man
     return (0, http_1.ok)(res, safe);
 });
 /**
+ * GET /api/users/sales-persons
+ * Authenticated. Returns list of active sales team members.
+ */
+router.get("/sales-persons", auth_1.authenticate, async (_req, res) => {
+    const c = await (0, collections_1.getCollections)();
+    const allUsers = await c.users.find({ isActive: { $ne: false } }).toArray();
+    const salesUsers = allUsers.filter((u) => {
+        const role = String(u.role || "").toLowerCase();
+        return (role.includes("sales") ||
+            role.includes("bd") ||
+            role.includes("business") ||
+            role === "admin" ||
+            role === "sales manager" ||
+            role === "sales executive" ||
+            role === "sales representative");
+    });
+    const targetUsers = salesUsers.length > 0 ? salesUsers : allUsers;
+    const safe = targetUsers.map((u) => ({
+        id: u.id,
+        name: u.name,
+        email: u.email,
+        mobile: u.mobile,
+        role: u.role,
+    }));
+    return (0, http_1.ok)(res, safe);
+});
+/**
  * GET /api/users/pending-registrations
  * Admin only. Returns pending registration requests.
  */
